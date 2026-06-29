@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sync2Time — Time tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=20260629-bulkmail-6" />
+</head>
+<body>
+  <div class="login-shell" id="loginShell">
+    <form class="login-card" id="loginForm">
+      <a class="brand login-brand" href="#"><span class="brand-mark">S</span><span>Sync2Time</span></a>
+      <p class="eyebrow">WELCOME BACK</p>
+      <h1>Sign in to your workspace.</h1>
+      <p class="login-copy">Your view is selected automatically from your account.</p>
+      <label>Work email<input id="loginEmail" type="email" autocomplete="email" placeholder="you@company.com" required></label>
+      <label>Password<input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter your password" required></label>
+      <p class="login-error" id="loginError" hidden></p>
+      <button class="start-btn" type="submit">Sign in <span>→</span></button>
+      <p class="login-note">Admin and employee access are kept separate.</p>
+    </form>
+  </div>
+
+  <aside class="sidebar">
+    <a class="brand" href="#"><span class="brand-mark">S</span><span>Sync2Time</span></a>
+    <nav>
+      <a class="nav-item active" href="#today"><span>▷</span> Today</a>
+      <a class="nav-item admin-only" href="#attendance"><span>▥</span> Attendance</a>
+      <a class="nav-item admin-only" href="#projects"><span>◒</span> Projects</a>
+      <a class="nav-item admin-only" href="#reports"><span>▤</span> Reports</a>
+      <a class="nav-item admin-only" href="#payroll"><span>$</span> Payroll</a>
+      <a class="nav-item admin-only" href="#team"><span>♧</span> Team</a>
+      <a class="nav-item admin-only" href="#approvals"><span>✓</span> Approvals</a>
+      <a class="nav-item employee-only" href="#calendar"><span>◫</span> Leave Calendar</a>
+      <a class="nav-item employee-only" href="#documents"><span>⇧</span> Coaching Docs</a>
+      <a class="nav-item employee-only" href="#requests"><span>✎</span> My Requests</a>
+    </nav>
+    <div class="sidebar-bottom">
+      <button class="upgrade">✦ &nbsp;Workspace tools</button>
+      <button class="profile" id="profileButton"><span class="avatar small" id="profileInitials">ML</span><span><b id="profileName">Marina Lee</b><small id="profileRole">Personal workspace</small></span><i>⌄</i></button>
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow" id="todayLabel">WEDNESDAY, JUNE 24</p>
+        <h1 id="greeting">Good morning.</h1>
+      </div>
+      <div class="header-actions"><span class="access-chip" id="accessChip"><i></i> Admin access</span><button class="icon-btn" aria-label="Notifications">⌁</button><button class="help">?</button></div>
+    </header>
+
+    <section class="hero-grid" id="today">
+      <article class="timer-card">
+        <div class="timer-top"><span class="status-dot" id="statusDot"></span><span id="statusLabel">Ready to focus</span><button class="more" aria-label="Timer menu">•••</button></div>
+        <div class="timer-main">
+          <div class="timer-value" id="timerValue">00:00:00</div>
+          <p id="timerHint">Choose a task, then start your timer.</p>
+        </div>
+        <div class="task-picker">
+          <label for="taskInput">WHAT ARE YOU WORKING ON?</label>
+          <div class="task-row"><span class="project-dot coral"></span><input id="taskInput" value="Coaching" /><button id="projectButton" type="button">⌄</button></div>
+        </div>
+        <div class="timer-controls"><button class="secondary" id="addTime" type="button">+ Add time</button><button class="secondary employee-action" id="lunchButton" type="button">Start lunch</button><button class="start-btn" id="toggleTimer" type="button"><span id="playIcon">▶</span><span id="timerButtonText">Clock in</span></button></div>
+      </article>
+
+      <article class="summary-card dashboard-clickable" id="activitySummary" tabindex="0" role="button" aria-label="View today's attendance summary">
+        <div class="summary-head"><div><p class="eyebrow">TODAY'S ACTIVITY</p><h2 id="hoursTotal">0h 00m</h2></div><span class="trend">+ 18% <i>↗</i></span></div>
+        <div class="chart-wrap"><div class="chart-labels"><span>8h</span><span>4h</span><span>0h</span></div><div class="bars" id="bars"></div></div>
+        <div class="summary-foot"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+      </article>
+    </section>
+
+    <section class="live-team-section" id="teamPulse">
+      <div class="section-title"><div><p class="eyebrow">LIVE TEAM PULSE</p><h2>Who's working now</h2><p>Clocked-in employees and what they're focused on.</p></div><span class="live-count"><i></i><b id="liveEmployeeCount">0</b> working now</span></div>
+      <div class="live-team-card"><div class="live-team-head"><span>EMPLOYEE</span><span>ACTIVE TASK</span><span>CLOCKED IN</span><span>TIME TODAY</span><span>STATUS</span></div><div id="liveTeamRows"></div></div>
+    </section>
+
+    <section class="schedule-section" id="attendance">
+      <div class="section-title"><div><p class="eyebrow">SCHEDULE WATCH</p><h2>Attendance exceptions</h2><p>Based on each employee's assigned shift from the roster.</p></div><button class="export" id="scheduleExport">⇩ Export schedule watch</button></div>
+      <div class="schedule-metrics">
+        <button class="schedule-metric active" data-schedule-filter="checked-in"><span>CHECKED IN</span><b id="checkedInMetric">0</b><small>Working right now</small></button>
+        <button class="schedule-metric" data-schedule-filter="early-in"><span>EARLY CHECK-IN</span><b id="earlyInMetric">0</b><small>Before scheduled start</small></button>
+        <button class="schedule-metric" data-schedule-filter="early-out"><span>EARLY CLOCK-OUT</span><b id="earlyOutMetric">0</b><small>Before scheduled end</small></button>
+        <button class="schedule-metric" data-schedule-filter="overtime"><span>OVERTIME</span><b id="overtimeMetric">0</b><small>After scheduled end</small></button>
+      </div>
+      <div class="earnings-card"><div><p class="eyebrow">LIVE DOLLAR RATE CALCULATOR</p><h3 id="livePayroll">$0.00</h3><p>Estimated pay earned by employees currently clocked in.</p></div><div class="earnings-method"><b id="fxRateLabel">PHP→USD rate loading...</b><span id="fxRateValue">₱1.00 = —</span><small id="fxRateMeta">Fetching today's reference exchange rate.</small></div><div class="earning-list" id="earningRows"></div></div>
+      <div class="schedule-card"><div class="schedule-head"><span>EMPLOYEE</span><span>SCHEDULE</span><span>CLOCK IN</span><span>CLOCK OUT</span><span>RATE</span><span>EARNED</span><span>ATTENDANCE NOTE</span></div><div id="scheduleRows"></div><div class="report-footer"><span id="scheduleCount">0 employees shown</span><span>Click any person to view details</span></div></div>
+    </section>
+
+    <section class="payroll-calendar-section">
+      <div class="section-title"><div><p class="eyebrow">PAYROLL &amp; HOLIDAYS</p><h2>Payday and holiday calendar</h2><p>Payday reminders and regular-holiday double-pay rules.</p></div></div>
+      <div class="payroll-grid"><article class="payday-card dashboard-clickable" id="paydayCard" tabindex="0" role="button"><p class="eyebrow">NEXT PAYDAY</p><h3 id="nextPayday">—</h3><p id="paydayMessage">Calculating your payroll schedule...</p><span id="paydayAlert" hidden>● Pay-day reminder is active</span></article><article class="holiday-pay-card"><p class="eyebrow">TODAY'S HOLIDAY PAY</p><h3 id="holidayMultiplier">1× standard pay</h3><p id="holidayPayMessage">No regular holiday today.</p></article></div>
+      <div class="holiday-calendar-card"><div class="calendar-head"><button id="calendarPrev" aria-label="Previous month">‹</button><h3 id="calendarMonth">—</h3><button id="calendarNext" aria-label="Next month">›</button></div><div class="calendar-week"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div><div id="holidayCalendar" class="holiday-calendar"></div><div class="holiday-legend"><span><i class="regular-holiday"></i> Regular holiday · 2× pay</span><span><i class="special-holiday"></i> Special non-working day</span></div></div>
+    </section>
+
+    <section class="activity-section" id="personalActivity">
+      <div class="section-title"><div><h2>Today's time</h2><p>Everything you've tracked today.</p></div><button class="export" id="exportButton">⇩ Export <span>⌄</span></button></div>
+      <div class="clock-card dashboard-clickable" id="clockSummary" tabindex="0" role="button" aria-label="View tracked time details">
+        <div class="clock-event"><span class="clock-icon in">↳</span><div><b>Clock in</b><small id="clockInDisplay">Not clocked in yet</small></div></div>
+        <div class="clock-line"></div>
+        <div class="clock-event"><span class="clock-icon out">↲</span><div><b>Clock out</b><small id="clockOutDisplay">—</small></div></div>
+        <div class="clock-total"><span>WORKDAY TOTAL</span><b id="workdayTotal">00:00</b></div>
+      </div>
+      <div class="table-card">
+        <div class="table-head"><span>PROJECT &amp; TASK</span><span>TIME</span><span></span></div>
+        <div id="entries" class="entries"></div>
+        <div class="empty-state" id="emptyState">No tracked time yet. Your first Sync2Time entry is waiting.</div>
+        <div class="table-total"><span>Total today</span><b id="tableTotal">0h 00m</b></div>
+      </div>
+    </section>
+
+    <section class="deleted-time-section employee-only" id="deletedTimeNotice">
+      <div class="section-title"><div><p class="eyebrow">TIME ADJUSTMENTS</p><h2>Deleted time notices</h2><p>If admin removes a time entry, you will see it here.</p></div></div>
+      <div class="docs-card" id="deletedTimeRows"></div>
+    </section>
+
+    <section class="employee-payroll-adjustments employee-only" id="employeePayrollAdjustments">
+      <div class="section-title"><div><p class="eyebrow">PAYROLL CHANGES</p><h2>My payroll adjustments</h2><p>Hours deductions, amount deductions, and commissions entered by admin.</p></div></div>
+      <div class="docs-card" id="employeeAdjustmentRows"></div>
+    </section>
+
+    <section class="report-section" id="attendanceRecords">
+      <div class="section-title"><div><p class="eyebrow">ADMIN REPORTING</p><h2>Employee attendance</h2><p>Every clock-in and clock-out, in one tidy view.</p></div><button class="export" id="attendanceExport">⇩ Export report <span>⌄</span></button></div>
+      <div class="report-metrics">
+        <article><span>TEAM MEMBERS</span><b id="teamCount">0</b><small>Employees in the roster</small></article>
+        <article><span>CLOCKED IN NOW</span><b id="clockedInCount">3</b><small class="positive">● Live attendance</small></article>
+        <article><span>HOURS THIS WEEK</span><b>231h 45m</b><small>Across the whole team</small></article>
+        <article><span>ON-TIME RATE</span><b>96%</b><small class="positive">↑ 4% from last week</small></article>
+      </div>
+      <div class="attendance-card">
+        <div class="report-toolbar"><label class="search"><span>⌕</span><input id="employeeSearch" placeholder="Search employee" /></label><label class="filter-label">DATE <select id="dateFilter"><option value="today">Today</option><option value="week">This week</option></select></label><label class="filter-label">STATUS <select id="statusFilter"><option value="all">All status</option><option value="clocked">Clocked in</option><option value="complete">Complete</option></select></label></div>
+        <div class="attendance-table"><div class="attendance-head"><span>EMPLOYEE</span><span>DATE</span><span>CLOCK IN</span><span>CLOCK OUT</span><span>WORKED</span><span>STATUS</span><span>ACTION</span></div><div id="attendanceRows"></div></div>
+        <div class="report-footer"><span id="reportCount">8 employee records</span><span>Showing the latest attendance data</span></div>
+      </div>
+      <div class="employee-management" id="employeeManagement">
+        <div><p class="eyebrow">EMPLOYEE DIRECTORY</p><h2>Manage employees</h2><p>Import a team list or make changes to individual access.</p></div>
+        <div class="management-actions"><label class="import-btn" for="employeeImport">⇧ Import employees</label><input id="employeeImport" type="file" accept=".csv" hidden><button class="add-employee" id="seedEmployees">Create roster access</button><button class="add-employee" id="addEmployee">+ Add employee</button><select id="manageEmployeeSelect" aria-label="Select employee"><option value="">Select employee</option></select><button class="edit-employee" id="editEmployee">✎ Edit</button><button class="delete-employee" id="deleteEmployee">× Delete</button></div>
+      </div>
+    </section>
+
+    <section class="projects-section" id="projects">
+      <div class="section-title"><div><p class="eyebrow">PROJECTS</p><h2>Team work by category</h2><p>Choose a category to see who is assigned and what they are doing.</p></div><button class="export" id="projectClear">Clear filter</button></div>
+      <div class="project-options" id="projectOptions"><button class="project-option active" data-project="All"><i></i>All work</button><button class="project-option" data-project="Coaching"><i></i>Coaching</button><button class="project-option" data-project="Meeting"><i></i>Meeting</button><button class="project-option" data-project="On Class"><i></i>On Class</button><button class="project-option" data-project="Admin"><i></i>Admin</button><button class="project-option" data-project="Webinar"><i></i>Webinar</button><button class="project-option" data-project="SMM"><i></i>SMM</button></div>
+      <form class="project-admin-card" id="projectForm"><div><p class="eyebrow">ADMIN PROJECT SETUP</p><h2>Add a project</h2><p>New projects become available as task categories for employees.</p></div><label>Project name<input id="projectName" placeholder="Example: Client Onboarding" required></label><button class="start-btn" type="submit">+ Add project</button></form>
+      <div class="project-list-card"><div class="project-list-head"><span>EMPLOYEE</span><span>PROJECT</span><span>ACTIVE TASK</span><span>SHIFT</span><span>STATUS</span></div><div id="projectRows"></div><div class="report-footer"><span id="projectCount">0 assignments</span><span>Click any person to open their details</span></div></div>
+    </section>
+
+    <section class="reports-section admin-only" id="reports">
+      <div class="section-title"><div><p class="eyebrow">REPORTS</p><h2>Total hours worked</h2><p>Review employee totals per day, week, month, or custom date range.</p></div><button class="export" id="reportExport">⇩ Export report</button></div>
+      <div class="report-toolbar report-builder"><label class="filter-label">PERIOD <select id="reportPeriod"><option value="cutoff">Current payroll cutoff</option><option value="previous-cutoff">Previous payroll cutoff</option><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option><option value="custom">Custom date</option></select></label><label class="filter-label">FROM <input id="reportStart" type="date"></label><label class="filter-label">TO <input id="reportEnd" type="date"></label><label class="search"><span>⌕</span><input id="reportEmployee" placeholder="Search employee"></label></div>
+      <div class="report-metrics"><article><span>TOTAL HOURS</span><b id="reportTotalHours">0h 00m</b><small>Selected range</small></article><article><span>EMPLOYEES</span><b id="reportEmployeeCount">0</b><small>With tracked time</small></article><article><span>ENTRIES</span><b id="reportEntryCount">0</b><small>Clock records</small></article><article><span>PAY ESTIMATE</span><b id="reportPayEstimate">$0.00</b><small>Holiday multiplier included</small></article><article><span>PAY DATE</span><b id="reportPayDate">—</b><small id="reportPayDateNote">For payroll cutoffs</small></article></div>
+      <div class="attendance-card"><div class="report-table-head payroll-report-head"><span>EMPLOYEE</span><span>DATE / RANGE</span><span>ENTRIES</span><span>WORKED</span><span>ADJUSTMENTS</span><span>NET PAY</span><span>ACTION</span></div><div id="reportRows"></div><div class="report-footer"><span id="reportRangeLabel">Showing today's report</span><span>Deleted entries are excluded</span></div></div>
+    </section>
+
+    <section class="payroll-section admin-only" id="payroll">
+      <div class="section-title"><div><p class="eyebrow">ADMIN PAYROLL</p><h2>Payroll by employee role</h2><p>Review one payroll cutoff, edit payroll items, and export the active role tab.</p></div><button class="export" id="payrollExport">⇩ Export active tab</button></div>
+      <div class="payroll-toolbar">
+        <label class="filter-label">CUTOFF <select id="payrollCutoff"><option value="current">Current cutoff</option><option value="previous">Previous cutoff</option></select></label>
+        <label class="filter-label">FROM <input id="payrollStart" type="date" readonly></label>
+        <label class="filter-label">TO <input id="payrollEnd" type="date" readonly></label>
+        <label class="filter-label fx-edit">USD TO PHP RATE <input id="payrollFxRate" type="number" min="1" step="0.0001"></label>
+        <button class="secondary" id="resetPayrollFx" type="button">Use live rate</button>
+        <a class="secondary google-rate-link" href="https://www.google.com/finance/quote/USD-PHP" target="_blank" rel="noopener">Check Google rate</a>
+        <span class="fx-source" id="payrollFxSource">Loading exchange rate…</span>
+      </div>
+      <div class="payroll-tabs" id="payrollTabs"><button class="payroll-tab active" data-payroll-role="coaches">Coaches</button><button class="payroll-tab" data-payroll-role="admin">Admin</button><button class="payroll-tab" data-payroll-role="webinar">Webinar</button><button class="payroll-tab" data-payroll-role="smm">SMM</button><button class="payroll-tab" data-payroll-role="other">Other</button></div>
+      <div class="payroll-summary"><article><span>EMPLOYEES</span><b id="payrollEmployeeCount">0</b></article><article><span>ACTUAL HOURS</span><b id="payrollActualHours">0h 00m</b></article><article><span>OT HOURS</span><b id="payrollOtHours">0h 00m</b></article><article><span>NET PAY</span><b id="payrollNetPay">₱0.00</b></article></div>
+      <div class="payroll-table-card"><div class="payroll-table-scroll"><div class="payroll-head" id="payrollHead"></div><div id="payrollRows"></div></div><div class="report-footer"><span id="payrollRangeLabel"></span><span>Click Edit to add adjustments, deductions, commissions, and notes</span></div></div>
+      <div class="bulk-paystub-card"><div><p class="eyebrow">BULK PAYSTUB EMAIL</p><h3 id="bulkPaystubTitle">Approve employees to enable sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><button class="start-btn" id="sendPaystubs" type="button" disabled>Send Paystubs</button></div>
+    </section>
+
+    <section class="team-section" id="team">
+      <div class="section-title"><div><p class="eyebrow">TEAM DIRECTORY</p><h2>All employees</h2><p>Roster details, assigned shifts, rates, and access status.</p></div><button class="start-btn" id="teamAddEmployee">+ Add employee</button></div>
+      <div class="team-list-card"><div class="team-list-head"><span>EMPLOYEE</span><span>ROLE &amp; DEPARTMENT</span><span>SHIFT</span><span>RATE</span><span>ACCESS</span><span>ACTION</span></div><div id="teamRows"></div><div class="report-footer"><span id="teamDirectoryCount">0 employees</span><span>Clocked-in employees can be clocked out by admin</span></div></div>
+    </section>
+
+    <section class="approval-section admin-only" id="approvals">
+      <div class="section-title"><div><p class="eyebrow">APPROVAL CENTER</p><h2>Leave and time edit approvals</h2><p>Approve or reject employee leave filings and time correction requests.</p></div></div>
+      <div class="approval-grid"><article class="approval-card"><h3>Leave requests</h3><div id="leaveApprovalRows"></div></article><article class="approval-card"><h3>Time edit requests</h3><div id="timeEditApprovalRows"></div></article><article class="approval-card"><h3>Overtime requests</h3><div id="overtimeApprovalRows"></div></article></div>
+    </section>
+
+    <section class="employee-calendar-section employee-only" id="calendar">
+      <div class="section-title"><div><p class="eyebrow">LEAVE CALENDAR</p><h2>File your leave</h2><p>Pick dates for leave. The app blocks a date if another employee already filed leave for that same day.</p></div><button class="start-btn" id="openLeaveRequest">+ File leave</button></div>
+      <div class="employee-calendar-card"><div class="calendar-head"><button id="leaveCalendarPrev" aria-label="Previous month">‹</button><h3 id="leaveCalendarMonth">—</h3><button id="leaveCalendarNext" aria-label="Next month">›</button></div><div class="calendar-week"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div><div id="leaveCalendar" class="holiday-calendar leave-calendar"></div></div>
+    </section>
+
+    <section class="employee-docs-section employee-only" id="documents">
+      <div class="section-title"><div><p class="eyebrow">COACHING DOCUMENTS</p><h2>Upload coaching documents</h2><p>Keep coaching files attached to your employee account.</p></div></div>
+      <div class="docs-card"><label class="upload-box" for="coachingUpload"><span>⇧ Upload document</span><small>PDF, image, doc, or spreadsheet</small></label><input id="coachingUpload" type="file" multiple hidden><div id="documentRows"></div></div>
+    </section>
+
+    <section class="employee-requests-section employee-only" id="requests">
+      <div class="section-title"><div><p class="eyebrow">MY REQUESTS</p><h2>Leave, time edit, and overtime requests</h2><p>Only approved overtime is included in payroll.</p></div><div class="header-actions"><button class="secondary" id="openOvertimeRequest">+ Request OT</button><button class="start-btn" id="openTimeEditRequest">+ Request time edit</button></div></div>
+      <div class="approval-grid"><article class="approval-card"><h3>My leave requests</h3><div id="myLeaveRows"></div></article><article class="approval-card"><h3>My time edit requests</h3><div id="myTimeEditRows"></div></article><article class="approval-card"><h3>My overtime requests</h3><div id="myOvertimeRows"></div></article></div>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <form class="modal" id="timeForm"><button type="button" class="modal-close" id="modalClose" aria-label="Close manual entry">×</button><p class="eyebrow">MANUAL ENTRY</p><h2>Add time</h2><label>Task <input id="manualTask" required placeholder="What did you work on?" /></label><div class="time-inputs"><label>Start <input id="manualStart" type="time" required /></label><label>End <input id="manualEnd" type="time" required /></label></div><div class="modal-actions"><button class="secondary" id="modalCancel" type="button">Cancel</button><button class="start-btn" type="submit">Save entry</button></div></form>
+  </div>
+  <div class="modal-backdrop" id="employeeModalBackdrop" hidden>
+    <form class="modal employee-form" id="employeeForm"><button type="button" class="modal-close" id="employeeModalClose" aria-label="Close employee form">×</button><p class="eyebrow" id="employeeFormEyebrow">ADMIN ACCESS</p><h2 id="employeeFormTitle">Give employee access</h2><label>Full name<input id="employeeName" required placeholder="Employee name"></label><label>Work email<input id="employeeEmail" type="email" required placeholder="employee@sync2va.com"></label><label>Role<input id="employeeRole" required placeholder="e.g. Operations"></label><label>Assigned project<select id="employeeProject"></select></label><label>Initial password <small>(employee will use this to sign in)</small><div class="password-row"><input id="employeePassword" type="text" required minlength="8" placeholder="Create a temporary password"><button class="secondary" id="generatePassword" type="button">Randomize</button></div></label><p class="login-error" id="employeeFormError" hidden></p><div class="modal-actions"><button class="secondary" id="employeeModalCancel" type="button">Cancel</button><button class="start-btn" id="employeeSave" type="submit">Save access</button></div></form>
+  </div>
+  <div class="modal-backdrop" id="leaveModalBackdrop" hidden>
+    <form class="modal" id="leaveForm"><button type="button" class="modal-close" id="leaveModalClose" aria-label="Close leave form">×</button><p class="eyebrow">LEAVE REQUEST</p><h2>File leave</h2><label>Leave date<input id="leaveDate" type="date" required></label><label>Reason<input id="leaveReason" required placeholder="Reason for leave"></label><p class="login-error" id="leaveFormError" hidden></p><div class="modal-actions"><button class="secondary" id="leaveModalCancel" type="button">Cancel</button><button class="start-btn" type="submit">Submit leave</button></div></form>
+  </div>
+  <div class="modal-backdrop" id="timeEditModalBackdrop" hidden>
+    <form class="modal" id="timeEditForm"><button type="button" class="modal-close" id="timeEditModalClose" aria-label="Close time edit request">×</button><p class="eyebrow">TIME EDIT REQUEST</p><h2>Request correction</h2><label>Date<input id="timeEditDate" type="date" required></label><div class="time-inputs"><label>Requested clock in<input id="timeEditIn" type="time" required></label><label>Requested clock out<input id="timeEditOut" type="time" required></label></div><label>Reason<input id="timeEditReason" required placeholder="Explain the correction"></label><p class="login-error" id="timeEditFormError" hidden></p><div class="modal-actions"><button class="secondary" id="timeEditModalCancel" type="button">Cancel</button><button class="start-btn" type="submit">Submit request</button></div></form>
+  </div>
+  <div class="modal-backdrop" id="overtimeModalBackdrop" hidden>
+    <form class="modal" id="overtimeForm"><button type="button" class="modal-close" id="overtimeModalClose" aria-label="Close overtime request">×</button><p class="eyebrow">OVERTIME REQUEST</p><h2>Request overtime</h2><label>Overtime date<input id="overtimeDate" type="date" required></label><label>OT hours<input id="overtimeHours" type="number" min="0.25" max="24" step="0.25" required></label><label>Reason<input id="overtimeReason" required maxlength="250" placeholder="Why was overtime needed?"></label><p class="login-error" id="overtimeFormError" hidden></p><div class="modal-actions"><button class="secondary" id="overtimeModalCancel" type="button">Cancel</button><button class="start-btn" type="submit">Submit OT</button></div></form>
+  </div>
+  <div class="modal-backdrop" id="employeeDetailBackdrop" hidden>
+    <section class="modal employee-detail" aria-labelledby="employeeDetailName"><button type="button" class="modal-close" id="employeeDetailClose" aria-label="Close employee details">×</button><p class="eyebrow">LIVE EMPLOYEE STATUS</p><div class="detail-person"><span class="person-avatar" id="detailAvatar">AA</span><div><h2 id="employeeDetailName">Employee</h2><p id="employeeDetailRole">Role</p></div></div><div class="detail-grid"><div><span>CURRENT TASK</span><b id="detailTask">—</b></div><div><span>STATUS</span><b id="detailStatus">—</b></div><div><span>CLOCKED IN</span><b id="detailClockIn">—</b></div><div><span>TIME TODAY</span><b id="detailWorked">—</b></div><div><span>RATE</span><b id="detailRate">—</b></div><div><span>ESTIMATED EARNED</span><b id="detailEarnings">—</b></div></div><button class="start-btn" id="detailDone" type="button">Done</button></section>
+  </div>
+  <div class="toast" id="toast"></div>
+  <div class="modal-backdrop" id="longSessionBackdrop" hidden>
+    <section class="modal long-session-modal" role="alertdialog" aria-modal="true" aria-labelledby="longSessionTitle">
+      <p class="eyebrow">WORK SESSION CHECK</p>
+      <h2 id="longSessionTitle">You have been working for 3 hours.</h2>
+      <p class="long-session-copy">Would you like to continue working or clock out? If you do not choose, Sync2Time will automatically clock you out in <b id="longSessionCountdown">60</b> seconds.</p>
+      <div class="modal-actions"><button class="secondary" id="continueWorking" type="button">Continue working</button><button class="start-btn" id="warningClockOut" type="button">Clock out now</button></div>
+    </section>
+  </div>
+  <div class="modal-backdrop" id="payrollAdjustmentBackdrop" hidden>
+    <form class="modal payroll-adjustment-modal" id="payrollAdjustmentForm">
+      <button type="button" class="modal-close" id="payrollAdjustmentClose" aria-label="Close payroll adjustment">×</button>
+      <p class="eyebrow">PAYROLL ADJUSTMENT</p>
+      <h2 id="payrollAdjustmentEmployee">Employee</h2>
+      <p class="adjustment-period" id="payrollAdjustmentPeriod"></p>
+      <div class="adjustment-grid"><label>Deduct hours<input id="deductHours" type="number" min="0" step="0.01" value="0"></label><label>Deduct amount ($)<input id="deductAmount" type="number" min="0" step="0.01" value="0"></label><label>Commission ($)<input id="commissionAmount" type="number" min="0" step="0.01" value="0"></label></div>
+      <label>Reason / notes<input id="adjustmentNote" maxlength="250" placeholder="Required for an audit trail"></label>
+      <p class="login-error" id="payrollAdjustmentError" hidden></p>
+      <div class="modal-actions"><button class="secondary" id="payrollAdjustmentCancel" type="button">Cancel</button><button class="start-btn" type="submit">Save adjustment</button></div>
+    </form>
+  </div>
+  <div class="modal-backdrop" id="exportBackdrop" hidden>
+    <section class="modal export-modal" aria-labelledby="exportTitle">
+      <button type="button" class="modal-close" id="exportClose" aria-label="Close export">×</button>
+      <p class="eyebrow">REPORT READY</p>
+      <h2 id="exportTitle">Export payroll report</h2>
+      <p class="export-help">Your CSV is ready. If the automatic download was blocked, use Download CSV below.</p>
+      <textarea id="exportCsvPreview" readonly aria-label="CSV report preview"></textarea>
+      <div class="modal-actions"><button class="secondary" id="copyExportCsv" type="button">Copy CSV</button><a class="start-btn export-download-link" id="downloadExportCsv" download="sync2time-report.csv">Download CSV</a></div>
+    </section>
+  </div>
+  <div class="modal-backdrop" id="payrollRowBackdrop" hidden>
+    <form class="modal payroll-row-modal" id="payrollRowForm"><button type="button" class="modal-close" id="payrollRowClose" aria-label="Close payroll editor">×</button><p class="eyebrow">PAYROLL EDITOR</p><h2 id="payrollRowEmployee">Employee</h2><p class="adjustment-period" id="payrollRowPeriod"></p><label id="payrollCutoffPayField">Cutoff Pay override (PHP)<input id="payrollRowCutoffPay" type="number" min="0" step="0.01"></label><label id="payrollGrossPayField">Gross Pay override (PHP)<input id="payrollRowGrossPay" type="number" min="0" step="0.01"></label><label id="payrollAdjustmentField">Adjustment (PHP, signed)<input id="payrollRowAdjustment" type="number" step="0.01" value="0"></label><label id="payrollDeductionField">Deductions (PHP, enter negative amount)<input id="payrollRowDeduction" type="number" step="0.01" value="0"></label><label id="payrollCommissionField">Commission (PHP)<input id="payrollRowCommission" type="number" step="0.01" value="0"></label><label>Notes<input id="payrollRowNote" maxlength="250" placeholder="Payroll note"></label><p class="login-error" id="payrollRowError" hidden></p><div class="modal-actions"><button class="secondary" id="payrollRowCancel" type="button">Cancel</button><button class="start-btn" type="submit">Save payroll item</button></div></form>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+  <script src="app.js?v=20260629-bulkmail-6"></script>
+</body>
+</html>
