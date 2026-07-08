@@ -2703,21 +2703,55 @@ function quickHoursPreviewText(row, deductHours) {
   return `${Number(deductHours || 0).toFixed(2)}h × ${phpMoney(rate)} ${rateSource} = -${phpMoney(pesoDeduction)} from net pay.`;
 }
 
+function compactHoursValue(value) {
+  const fixed = Number(value || 0).toFixed(2);
+  return fixed.replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+}
+
+function quickHoursNumber(value) {
+  const text = String(value ?? '').trim();
+  if (!text || text === '.' || text === '-') return null;
+  const number = Number(text);
+  return Number.isFinite(number) ? Math.max(0, number) : null;
+}
+
 function syncQuickHoursInputs(mode = 'deduct') {
   if (!editingQuickHoursRow) return;
   const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
   if (mode === 'payable') {
-    const payable = Math.min(actual, Math.max(0, Number($('#quickPayableHours').value) || 0));
+    const typedPayable = quickHoursNumber($('#quickPayableHours').value);
+    if (typedPayable === null) {
+      $('#quickDeductHours').value = '';
+      $('#quickDeductionPreview').textContent = 'Enter payable hours and Sync2Time will calculate the deduction.';
+      return;
+    }
+    const payable = Math.min(actual, typedPayable);
     const deduct = Math.max(0, actual - payable);
-    $('#quickPayableHours').value = payable.toFixed(2);
-    $('#quickDeductHours').value = deduct.toFixed(2);
+    $('#quickDeductHours').value = compactHoursValue(deduct);
+    $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, deduct);
   } else {
-    const deduct = Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
+    const typedDeduct = quickHoursNumber($('#quickDeductHours').value);
+    if (typedDeduct === null) {
+      $('#quickPayableHours').value = '';
+      $('#quickDeductionPreview').textContent = 'Enter deducted hours and Sync2Time will calculate payable hours.';
+      return;
+    }
+    const deduct = Math.min(actual, typedDeduct);
     const payable = Math.max(0, actual - deduct);
-    $('#quickDeductHours').value = deduct.toFixed(2);
-    $('#quickPayableHours').value = payable.toFixed(2);
+    $('#quickPayableHours').value = compactHoursValue(payable);
+    $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, deduct);
   }
-  $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, $('#quickDeductHours').value);
+}
+
+function finalizeQuickHoursInputs(mode = 'deduct') {
+  if (!editingQuickHoursRow) return;
+  syncQuickHoursInputs(mode);
+  const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
+  const deduct = Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
+  const payable = Math.max(0, actual - deduct);
+  $('#quickDeductHours').value = deduct.toFixed(2);
+  $('#quickPayableHours').value = payable.toFixed(2);
+  $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, deduct);
 }
 
 function openQuickHoursEditor(employeeId) {
@@ -2743,6 +2777,7 @@ async function saveQuickHoursAdjustment(event) {
   if (!editingQuickHoursRow) return;
   const row = editingQuickHoursRow;
   const { start, end } = payrollRange();
+  finalizeQuickHoursInputs(document.activeElement?.id === 'quickPayableHours' ? 'payable' : 'deduct');
   const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
   const deductedHours = Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
   const note = $('#quickHoursNote').value.trim();
@@ -4140,6 +4175,8 @@ $('#quickHoursBackdrop').onclick = event => {
 };
 $('#quickPayableHours').oninput = () => syncQuickHoursInputs('payable');
 $('#quickDeductHours').oninput = () => syncQuickHoursInputs('deduct');
+$('#quickPayableHours').onblur = () => finalizeQuickHoursInputs('payable');
+$('#quickDeductHours').onblur = () => finalizeQuickHoursInputs('deduct');
 $('#exportClose').onclick = () => { $('#exportBackdrop').hidden = true; };
 $('#exportBackdrop').onclick = event => {
   if (event.target === event.currentTarget) $('#exportBackdrop').hidden = true;
