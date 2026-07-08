@@ -172,7 +172,7 @@
       <div class="payroll-tabs" id="payrollTabs"><button class="payroll-tab active" data-payroll-role="coaches">Coaches</button><button class="payroll-tab" data-payroll-role="admin">Admin</button><button class="payroll-tab" data-payroll-role="webinar">Webinar</button><button class="payroll-tab" data-payroll-role="smm">SMM</button><button class="payroll-tab" data-payroll-role="other">Other</button></div>
       <div class="payroll-summary"><article><span>EMPLOYEES</span><b id="payrollEmployeeCount">0</b></article><article><span>ACTUAL HOURS</span><b id="payrollActualHours">0h 00m</b></article><article><span>OT HOURS</span><b id="payrollOtHours">0h 00m</b></article><article><span>NET PAY</span><b id="payrollNetPay">₱0.00</b></article></div>
       <div class="payroll-table-card"><div class="payroll-table-scroll"><div class="payroll-head" id="payrollHead"></div><div id="payrollRows"></div></div><div class="report-footer"><span id="payrollRangeLabel"></span><span id="payrollFooterHint">Click Edit to add adjustments, deductions, commissions, notes, and the paystub destination</span></div></div>
-      <div class="bulk-paystub-card"><div><p class="eyebrow">BULK PAYSTUB EMAIL</p><h3 id="bulkPaystubTitle">Approve employees to enable sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><button class="start-btn" id="sendPaystubs" type="button" disabled>Send Paystubs</button></div>
+      <div class="bulk-paystub-card"><div><p class="eyebrow">PAYSTUB APPROVAL STATUS</p><h3 id="bulkPaystubTitle">Approve employees before manual Gmail sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><button class="start-btn" id="sendPaystubs" type="button" disabled>Use row Email</button></div>
       <div class="manual-email-card"><div><p class="eyebrow">MANUAL GOOGLE EMAIL</p><h3>Send paystubs one employee at a time</h3><p>Use the Email button beside an employee. Sync2Time downloads the correct PDF and opens an editable Gmail draft from hr@sync2va.com.</p></div><button class="secondary" id="managePaystubTemplates" type="button">Manage email templates</button></div>
     </section>
 
@@ -290,6 +290,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260709-manual-gmail-1"></script>
+  <script src="app.js?v=20260709-manual-gmail-2"></script>
 </body>
 </html>

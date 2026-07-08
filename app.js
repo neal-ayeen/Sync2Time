@@ -2248,13 +2248,11 @@ function renderPayroll() {
   $('#payrollFooterHint').textContent = 'Click Edit or Recipient to update payroll values and the paystub destination email.';
   const approvedCount = currentPayrollRows.filter(row => row.paystubApproved).length;
   const recipientCount = currentPayrollRows.filter(row => paystubRecipients.some(item => item.employee_id === row.person.id)).length;
-  const emailedCount = currentPayrollRows.filter(row => row.paystubEmailedAt).length;
   const ready = currentPayrollRows.length > 0 && approvedCount === currentPayrollRows.length && recipientCount === currentPayrollRows.length;
-  const allEmailed = emailedCount === currentPayrollRows.length && currentPayrollRows.length > 0;
-  $('#bulkPaystubTitle').textContent = allEmailed ? `${selectedPayrollRole} paystubs were sent` : ready ? `${selectedPayrollRole} paystubs are ready` : 'Approve employees to enable sending';
-  $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · ${emailedCount} sent`;
-  $('#sendPaystubs').disabled = !ready || allEmailed;
-  $('#sendPaystubs').textContent = allEmailed ? 'Paystubs Sent' : 'Send Paystubs';
+  $('#bulkPaystubTitle').textContent = ready ? `${selectedPayrollRole} paystubs are ready for manual Gmail` : 'Approve employees before manual Gmail sending';
+  $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · use the Email button beside each employee`;
+  $('#sendPaystubs').disabled = true;
+  $('#sendPaystubs').textContent = 'Use row Email';
 }
 
 function loadPaystubLogo() {
@@ -2461,10 +2459,10 @@ async function savePaystubEmailTemplate() {
     try {
       await saveSupabaseSetting('paystub_email_templates', { templates: paystubEmailTemplates });
     } catch (error) {
-      $('#paystubEmailError').textContent = `Template saved in this browser, but Supabase sync failed: ${error.message}`;
-      $('#paystubEmailError').hidden = false;
       renderPaystubEmailTemplatePicker();
-      return false;
+      $('#paystubEmailError').textContent = `Template saved in this browser, but Supabase sync failed: ${error.message}. You can still open the Gmail draft.`;
+      $('#paystubEmailError').hidden = false;
+      return true;
     }
   }
   renderPaystubEmailTemplatePicker();
@@ -2506,33 +2504,52 @@ async function openManualPaystubGmail(event) {
   if (!emailingPayrollRow) return;
   const row = emailingPayrollRow;
   const recipient = $('#paystubEmailRecipient').value.trim().toLowerCase();
+  const button = $('#openPaystubGmail');
+  const originalLabel = button.textContent;
   if (!recipient) {
     $('#paystubEmailError').textContent = 'This employee does not have a paystub recipient email.';
     $('#paystubEmailError').hidden = false;
     return;
   }
-  const saved = await savePaystubEmailTemplate();
-  if (!saved) return;
   if (!row.paystubApproved && !confirm('This paystub is not approved yet. Open the Gmail draft anyway?')) return;
-  const gmailWindow = window.open('about:blank', '_blank');
+  const gmailWindow = window.open('', '_blank');
   if (!gmailWindow) {
     $('#paystubEmailError').textContent = 'Your browser blocked the Gmail window. Allow pop-ups for this site, then try again.';
     $('#paystubEmailError').hidden = false;
     return;
   }
-  gmailWindow.document.write('<p style="font-family:sans-serif;padding:24px">Preparing Gmail draft and downloading the paystub...</p>');
-  const result = await buildEmployeePaystub(row.person.id, true);
-  if (!result?.filename) {
-    gmailWindow.close();
-    return;
+  button.disabled = true;
+  button.textContent = 'Preparing Gmail draft...';
+  try {
+    gmailWindow.document.write('<p style="font-family:sans-serif;padding:24px">Preparing Gmail draft and downloading the paystub...</p>');
+    const saved = await savePaystubEmailTemplate();
+    if (!saved) {
+      gmailWindow.document.body.innerHTML = '<p style="font-family:sans-serif;padding:24px">Sync2Time could not save the email template. Please return to Sync2Time and check the error message.</p>';
+      return;
+    }
+    const result = await buildEmployeePaystub(row.person.id, true);
+    if (!result?.filename) {
+      gmailWindow.document.body.innerHTML = '<p style="font-family:sans-serif;padding:24px">Sync2Time could not create the paystub PDF. Please return to Sync2Time and try again.</p>';
+      return;
+    }
+    const template = selectedPaystubEmailTemplate();
+    const subject = fillPaystubEmailTemplate(template.subject, row);
+    const body = `${fillPaystubEmailTemplate(template.body, row)}\n\nAttachment reminder: ${result.filename}`;
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&authuser=${encodeURIComponent(adminAccount.email)}&to=${encodeURIComponent(recipient)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    gmailWindow.location.replace(gmailUrl);
+    closePaystubEmailEditor();
+    showToast(`Gmail draft opened for ${row.person.name}. Attach the downloaded PDF before sending.`);
+  } catch (error) {
+    console.error('Manual Gmail paystub error:', error);
+    $('#paystubEmailError').textContent = `Could not open the Gmail draft: ${error.message || 'unknown error'}`;
+    $('#paystubEmailError').hidden = false;
+    if (!gmailWindow.closed) {
+      gmailWindow.document.body.innerHTML = '<p style="font-family:sans-serif;padding:24px">Sync2Time hit an error while preparing the Gmail draft. Please return to Sync2Time and check the message.</p>';
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
   }
-  const template = selectedPaystubEmailTemplate();
-  const subject = fillPaystubEmailTemplate(template.subject, row);
-  const body = `${fillPaystubEmailTemplate(template.body, row)}\n\nAttachment reminder: ${result.filename}`;
-  const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&authuser=${encodeURIComponent(adminAccount.email)}&to=${encodeURIComponent(recipient)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  gmailWindow.location.replace(gmailUrl);
-  closePaystubEmailEditor();
-  showToast(`Gmail draft opened for ${row.person.name}. Attach the downloaded PDF before sending.`);
 }
 
 function closePayrollAdjustment() {
