@@ -1159,6 +1159,28 @@ function edgeFunctionDeployMessage(functionName = 'admin-save-employee') {
   return `Supabase Edge Function "${functionName}" is not deployed or reachable. Deploy outputs/supabase/functions/${functionName}/index.ts in Supabase Edge Functions, then refresh the website.`;
 }
 
+async function supabaseFunctionErrorMessage(error, data = null) {
+  if (data?.error) return data.error;
+  const response = error?.context;
+  if (response) {
+    try {
+      const copy = typeof response.clone === 'function' ? response.clone() : response;
+      const body = await copy.json();
+      if (body?.error) return body.error;
+      if (body?.message) return body.message;
+    } catch {
+      try {
+        const copy = typeof response.clone === 'function' ? response.clone() : response;
+        const text = await copy.text();
+        if (text) return text.slice(0, 240);
+      } catch {
+        // Fall back to the SDK error below.
+      }
+    }
+  }
+  return error?.message || 'Unable to save employee to Supabase.';
+}
+
 function editableEmployeeRecords() {
   const byEmail = new Map();
   rosterSource().forEach(person => {
@@ -1296,6 +1318,7 @@ async function upsertSupabaseEmployee(record) {
     error = requestError;
   }
   if (error || !data?.ok) {
+    const detailedMessage = await supabaseFunctionErrorMessage(error, data);
     if (isEdgeFunctionRequestFailure(error) && isUuid(record.id) && !emailChanged && !passwordChanged) {
       const directResult = await updateSupabaseEmployeeProfileDirect(record);
       if (directResult.ok) return directResult;
@@ -1306,7 +1329,7 @@ async function upsertSupabaseEmployee(record) {
     }
     const functionMessage = isEdgeFunctionRequestFailure(error)
       ? edgeFunctionDeployMessage('admin-save-employee')
-      : (error?.message || data?.error || 'Unable to save employee to Supabase.');
+      : detailedMessage;
     return { ok: false, error: functionMessage };
   }
   return { ok: true, ...data };
