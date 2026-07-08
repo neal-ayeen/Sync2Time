@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260708-employee-edit-sync-15" />
+  <link rel="stylesheet" href="styles.css?v=20260709-manual-gmail-1" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -173,6 +173,7 @@
       <div class="payroll-summary"><article><span>EMPLOYEES</span><b id="payrollEmployeeCount">0</b></article><article><span>ACTUAL HOURS</span><b id="payrollActualHours">0h 00m</b></article><article><span>OT HOURS</span><b id="payrollOtHours">0h 00m</b></article><article><span>NET PAY</span><b id="payrollNetPay">₱0.00</b></article></div>
       <div class="payroll-table-card"><div class="payroll-table-scroll"><div class="payroll-head" id="payrollHead"></div><div id="payrollRows"></div></div><div class="report-footer"><span id="payrollRangeLabel"></span><span id="payrollFooterHint">Click Edit to add adjustments, deductions, commissions, notes, and the paystub destination</span></div></div>
       <div class="bulk-paystub-card"><div><p class="eyebrow">BULK PAYSTUB EMAIL</p><h3 id="bulkPaystubTitle">Approve employees to enable sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><button class="start-btn" id="sendPaystubs" type="button" disabled>Send Paystubs</button></div>
+      <div class="manual-email-card"><div><p class="eyebrow">MANUAL GOOGLE EMAIL</p><h3>Send paystubs one employee at a time</h3><p>Use the Email button beside an employee. Sync2Time downloads the correct PDF and opens an editable Gmail draft from hr@sync2va.com.</p></div><button class="secondary" id="managePaystubTemplates" type="button">Manage email templates</button></div>
     </section>
 
     <section class="team-section" id="team">
@@ -266,8 +267,29 @@
   <div class="modal-backdrop" id="payrollRowBackdrop" hidden>
     <form class="modal payroll-row-modal" id="payrollRowForm"><button type="button" class="modal-close" id="payrollRowClose" aria-label="Close payroll editor">×</button><p class="eyebrow">PAYROLL EDITOR</p><h2 id="payrollRowEmployee">Employee</h2><p class="adjustment-period" id="payrollRowPeriod"></p><label id="payrollCutoffPayField">Cutoff Pay override (PHP)<input id="payrollRowCutoffPay" type="number" min="0" step="0.01"></label><label id="payrollGrossPayField">Gross Pay override (PHP)<input id="payrollRowGrossPay" type="number" min="0" step="0.01"></label><label id="payrollAdjustmentField">Adjustment (PHP, signed)<input id="payrollRowAdjustment" type="number" step="0.01" value="0"></label><label id="payrollDeductionField">Deductions (PHP, enter negative amount)<input id="payrollRowDeduction" type="number" step="0.01" value="0"></label><label id="payrollCommissionField">Commission (PHP)<input id="payrollRowCommission" type="number" step="0.01" value="0"></label><label>Notes<input id="payrollRowNote" maxlength="250" placeholder="Payroll note"></label><p class="login-error" id="payrollRowError" hidden></p><div class="modal-actions"><button class="secondary" id="payrollRowCancel" type="button">Cancel</button><button class="start-btn" type="submit">Save payroll item</button></div></form>
   </div>
+  <div class="modal-backdrop" id="paystubEmailBackdrop" hidden>
+    <form class="modal paystub-email-modal" id="paystubEmailForm">
+      <button type="button" class="modal-close" id="paystubEmailClose" aria-label="Close manual paystub email">×</button>
+      <p class="eyebrow">MANUAL PAYSTUB EMAIL</p>
+      <h2 id="paystubEmailEmployee">Email template</h2>
+      <p class="gmail-sender-note">Gmail sender: <b>hr@sync2va.com</b>. Make sure this Google account is signed in before opening the draft.</p>
+      <label id="paystubEmailRecipientLabel">Send to<input id="paystubEmailRecipient" type="email" readonly></label>
+      <div class="template-picker-row">
+        <label>Email template<select id="paystubEmailTemplate"></select></label>
+        <button class="secondary" id="newPaystubEmailTemplate" type="button">+ Add template</button>
+      </div>
+      <label>Template name<input id="paystubEmailTemplateName" maxlength="80" required></label>
+      <label>Subject<input id="paystubEmailSubject" maxlength="180" required></label>
+      <label>Message<textarea id="paystubEmailBody" rows="10" required></textarea></label>
+      <p class="template-variables">Available fields: {{employee_name}}, {{pay_period}}, {{pay_date}}, {{net_pay}}, {{role}}</p>
+      <p class="gmail-attachment-note">Gmail cannot attach a local file automatically. Sync2Time will download the employee’s PDF first; attach that downloaded PDF to the Gmail draft before clicking Send.</p>
+      <p class="login-error" id="paystubEmailError" hidden></p>
+      <div class="template-actions"><button class="secondary danger-outline" id="deletePaystubEmailTemplate" type="button">Delete template</button><button class="secondary" id="savePaystubEmailTemplate" type="button">Save template</button></div>
+      <div class="modal-actions"><button class="secondary" id="paystubEmailCancel" type="button">Cancel</button><button class="start-btn" id="openPaystubGmail" type="submit">Download PDF &amp; Open Gmail</button></div>
+    </form>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260708-employee-edit-sync-15"></script>
+  <script src="app.js?v=20260709-manual-gmail-1"></script>
 </body>
 </html>

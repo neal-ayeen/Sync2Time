@@ -106,6 +106,17 @@ let sharedSettings = {};
 let deletedTimeAlerts = JSON.parse(localStorage.getItem('sync2time-deleted-time-alerts') || '[]');
 let payrollAdjustments = JSON.parse(localStorage.getItem('sync2time-payroll-adjustments') || '[]');
 let paystubRecipients = JSON.parse(localStorage.getItem('sync2time-paystub-recipients') || '[]');
+const DEFAULT_PAYSTUB_EMAIL_TEMPLATES = [
+  {
+    id: 'standard-paystub',
+    name: 'Standard paystub',
+    subject: 'Sync2Time Paystub - {{pay_period}}',
+    body: 'Hello {{employee_name}},\n\nPlease find attached your Sync2Time paystub for {{pay_period}}.\n\nNet pay: {{net_pay}}\nPay date: {{pay_date}}\n\nPlease review the attached document and contact HR if you have any questions.\n\nRegards,\nSync2VA HR'
+  }
+];
+let paystubEmailTemplates = JSON.parse(localStorage.getItem('sync2time-paystub-email-templates') || 'null') || [...DEFAULT_PAYSTUB_EMAIL_TEMPLATES];
+let selectedPaystubEmailTemplateId = localStorage.getItem('sync2time-paystub-email-template-selected') || paystubEmailTemplates[0]?.id || '';
+let emailingPayrollRow = null;
 let currentReportRows = [];
 let currentPayrollRows = [];
 let currentEmployeeReportRows = [];
@@ -761,6 +772,14 @@ async function loadSupabaseSettings() {
   manualPayrollFxOverride = manualRate > 0 ? manualRate : null;
   if (manualPayrollFxOverride) localStorage.setItem('sync2time-payroll-usd-php', String(manualPayrollFxOverride));
   else localStorage.removeItem('sync2time-payroll-usd-php');
+  const sharedTemplates = sharedSettings.paystub_email_templates?.templates;
+  if (Array.isArray(sharedTemplates) && sharedTemplates.length) {
+    paystubEmailTemplates = normalizePaystubEmailTemplates(sharedTemplates);
+    localStorage.setItem('sync2time-paystub-email-templates', JSON.stringify(paystubEmailTemplates));
+  }
+  if (!paystubEmailTemplates.some(template => template.id === selectedPaystubEmailTemplateId)) {
+    selectedPaystubEmailTemplateId = paystubEmailTemplates[0]?.id || '';
+  }
 }
 
 async function loadPaystubRecipients() {
@@ -2216,7 +2235,7 @@ function renderPayroll() {
     const recipient = paystubRecipients.find(item => item.employee_id === row.person.id);
     const person = `<div class="person"><span class="person-avatar" style="background:${row.person.color}">${row.person.initials}</span><span>${escapeHtml(row.person.name)}<small>${escapeHtml(row.person.role)}</small><small>${recipient ? `Paystub: ${escapeHtml(recipient.recipient_email)}` : 'No paystub recipient'}</small></span></div>`;
     const approvalLabel = row.paystubApproved ? 'Approved' : 'Approve';
-    const edit = `<span class="payroll-actions"><button class="approve-paystub-btn ${row.paystubApproved ? 'approved' : ''}" data-approve-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="No paystub recipient"'}>${approvalLabel}</button><button class="edit-adjustment-btn" data-payroll-edit="${row.person.id}">Edit</button><button class="edit-adjustment-btn" data-payroll-recipient="${row.person.id}">Recipient</button><button class="paystub-btn" data-paystub="${row.person.id}">Paystub</button></span>`;
+    const edit = `<span class="payroll-actions"><button class="approve-paystub-btn ${row.paystubApproved ? 'approved' : ''}" data-approve-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="No paystub recipient"'}>${approvalLabel}</button><button class="edit-adjustment-btn" data-payroll-edit="${row.person.id}">Edit</button><button class="edit-adjustment-btn" data-payroll-recipient="${row.person.id}">Recipient</button><button class="paystub-btn" data-paystub="${row.person.id}">Paystub</button><button class="manual-email-btn" data-email-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="Add a paystub recipient first"'}>Email</button></span>`;
     if (selectedPayrollRole === 'coaches') return `<div class="payroll-row coaches">${person}<span>${row.expectedHours.toFixed(2)}</span><span>${row.actualHours.toFixed(2)}</span><span>${row.otHours.toFixed(2)}</span><span>$${row.hourlyUsd.toFixed(2)}</span><span>₱${fx.toFixed(4)}</span><span class="payroll-money">$${row.grossUsd.toFixed(2)}</span><span class="payroll-money">${phpMoney(row.grossPhp)}</span><span class="payroll-money" title="${escapeHtml(row.note)}">${phpMoney(row.adjustment)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
     if (selectedPayrollRole === 'admin') return `<div class="payroll-row admin">${person}<span>${row.expectedHours.toFixed(2)}</span><span>${row.actualHours.toFixed(2)}</span><span>${row.otHours.toFixed(2)}</span><span class="payroll-money">${phpMoney(row.cutoffPay)}</span><span class="payroll-money">${phpMoney(row.otPay)}</span><span class="payroll-money">${phpMoney(row.deductions)}</span><span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
     return `<div class="payroll-row ${selectedPayrollRole}">${person}<span class="payroll-money">${phpMoney(row.grossPhp)}</span><span class="payroll-money">${phpMoney(row.deductions)}</span><span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
@@ -2349,6 +2368,171 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     showToast(`${row.person.name}'s paystub downloaded.`);
   }
   return { base64, filename, row };
+}
+
+function normalizePaystubEmailTemplates(templates) {
+  const normalized = (Array.isArray(templates) ? templates : []).map((template, index) => ({
+    id: String(template?.id || `paystub-template-${index + 1}`),
+    name: String(template?.name || `Template ${index + 1}`).trim(),
+    subject: String(template?.subject || '').trim(),
+    body: String(template?.body || '')
+  })).filter(template => template.name && template.subject && template.body);
+  return normalized.length ? normalized : [...DEFAULT_PAYSTUB_EMAIL_TEMPLATES];
+}
+
+function persistPaystubEmailTemplates() {
+  paystubEmailTemplates = normalizePaystubEmailTemplates(paystubEmailTemplates);
+  localStorage.setItem('sync2time-paystub-email-templates', JSON.stringify(paystubEmailTemplates));
+  localStorage.setItem('sync2time-paystub-email-template-selected', selectedPaystubEmailTemplateId);
+}
+
+function selectedPaystubEmailTemplate() {
+  return paystubEmailTemplates.find(template => template.id === selectedPaystubEmailTemplateId) || paystubEmailTemplates[0];
+}
+
+function renderPaystubEmailTemplatePicker() {
+  const select = $('#paystubEmailTemplate');
+  if (!select) return;
+  select.innerHTML = paystubEmailTemplates.map(template => `<option value="${escapeHtml(template.id)}">${escapeHtml(template.name)}</option>`).join('');
+  if (!paystubEmailTemplates.some(template => template.id === selectedPaystubEmailTemplateId)) selectedPaystubEmailTemplateId = paystubEmailTemplates[0]?.id || '';
+  select.value = selectedPaystubEmailTemplateId;
+  loadPaystubEmailTemplateEditor();
+}
+
+function loadPaystubEmailTemplateEditor() {
+  const template = selectedPaystubEmailTemplate();
+  if (!template) return;
+  $('#paystubEmailTemplateName').value = template.name;
+  $('#paystubEmailSubject').value = template.subject;
+  $('#paystubEmailBody').value = template.body;
+  $('#deletePaystubEmailTemplate').disabled = paystubEmailTemplates.length <= 1;
+  $('#paystubEmailError').hidden = true;
+}
+
+function openPaystubEmailEditor(employeeId = '') {
+  emailingPayrollRow = employeeId ? currentPayrollRows.find(item => item.person.id === employeeId) || null : null;
+  const recipient = emailingPayrollRow ? paystubRecipients.find(item => item.employee_id === emailingPayrollRow.person.id) : null;
+  $('#paystubEmailEmployee').textContent = emailingPayrollRow ? `Email ${emailingPayrollRow.person.name}'s paystub` : 'Manage paystub email templates';
+  $('#paystubEmailRecipient').value = recipient?.recipient_email || '';
+  $('#paystubEmailRecipientLabel').hidden = !emailingPayrollRow;
+  $('#openPaystubGmail').hidden = !emailingPayrollRow;
+  $('#paystubEmailCancel').textContent = emailingPayrollRow ? 'Cancel' : 'Done';
+  renderPaystubEmailTemplatePicker();
+  $('#paystubEmailBackdrop').hidden = false;
+}
+
+function closePaystubEmailEditor() {
+  $('#paystubEmailBackdrop').hidden = true;
+  emailingPayrollRow = null;
+  $('#paystubEmailError').hidden = true;
+}
+
+function addPaystubEmailTemplate() {
+  const id = `paystub-template-${Date.now()}`;
+  paystubEmailTemplates.push({
+    id,
+    name: 'New paystub template',
+    subject: 'Sync2Time Paystub - {{pay_period}}',
+    body: 'Hello {{employee_name}},\n\nPlease find attached your paystub for {{pay_period}}.\n\nRegards,\nSync2VA HR'
+  });
+  selectedPaystubEmailTemplateId = id;
+  persistPaystubEmailTemplates();
+  renderPaystubEmailTemplatePicker();
+  $('#paystubEmailTemplateName').focus();
+  $('#paystubEmailTemplateName').select();
+}
+
+async function savePaystubEmailTemplate() {
+  const name = $('#paystubEmailTemplateName').value.trim();
+  const subject = $('#paystubEmailSubject').value.trim();
+  const body = $('#paystubEmailBody').value.trim();
+  if (!name || !subject || !body) {
+    $('#paystubEmailError').textContent = 'Template name, subject, and message are required.';
+    $('#paystubEmailError').hidden = false;
+    return false;
+  }
+  const index = paystubEmailTemplates.findIndex(template => template.id === selectedPaystubEmailTemplateId);
+  const updated = { id: selectedPaystubEmailTemplateId || `paystub-template-${Date.now()}`, name, subject, body };
+  if (index >= 0) paystubEmailTemplates[index] = updated;
+  else paystubEmailTemplates.push(updated);
+  selectedPaystubEmailTemplateId = updated.id;
+  persistPaystubEmailTemplates();
+  if (usesSupabase()) {
+    try {
+      await saveSupabaseSetting('paystub_email_templates', { templates: paystubEmailTemplates });
+    } catch (error) {
+      $('#paystubEmailError').textContent = `Template saved in this browser, but Supabase sync failed: ${error.message}`;
+      $('#paystubEmailError').hidden = false;
+      renderPaystubEmailTemplatePicker();
+      return false;
+    }
+  }
+  renderPaystubEmailTemplatePicker();
+  showToast('Paystub email template saved.');
+  return true;
+}
+
+async function deletePaystubEmailTemplate() {
+  if (paystubEmailTemplates.length <= 1) return showToast('Keep at least one paystub email template.');
+  const template = selectedPaystubEmailTemplate();
+  if (!template || !confirm(`Delete the "${template.name}" email template?`)) return;
+  paystubEmailTemplates = paystubEmailTemplates.filter(item => item.id !== template.id);
+  selectedPaystubEmailTemplateId = paystubEmailTemplates[0].id;
+  persistPaystubEmailTemplates();
+  if (usesSupabase()) {
+    try {
+      await saveSupabaseSetting('paystub_email_templates', { templates: paystubEmailTemplates });
+    } catch (error) {
+      showToast(`Template was deleted locally, but Supabase sync failed: ${error.message}`);
+    }
+  }
+  renderPaystubEmailTemplatePicker();
+}
+
+function fillPaystubEmailTemplate(text, row) {
+  const { start, end, payDateKey } = payrollRange();
+  const replacements = {
+    employee_name: row.person.name,
+    pay_period: `${businessDateLabel(start)} to ${businessDateLabel(end)}`,
+    pay_date: businessDateLabel(businessDateFromKey(payDateKey)),
+    net_pay: phpMoney(row.netPay),
+    role: row.person.role || 'Employee'
+  };
+  return String(text || '').replace(/\{\{\s*(employee_name|pay_period|pay_date|net_pay|role)\s*\}\}/gi, (_, key) => replacements[key.toLowerCase()] || '');
+}
+
+async function openManualPaystubGmail(event) {
+  event.preventDefault();
+  if (!emailingPayrollRow) return;
+  const row = emailingPayrollRow;
+  const recipient = $('#paystubEmailRecipient').value.trim().toLowerCase();
+  if (!recipient) {
+    $('#paystubEmailError').textContent = 'This employee does not have a paystub recipient email.';
+    $('#paystubEmailError').hidden = false;
+    return;
+  }
+  const saved = await savePaystubEmailTemplate();
+  if (!saved) return;
+  if (!row.paystubApproved && !confirm('This paystub is not approved yet. Open the Gmail draft anyway?')) return;
+  const gmailWindow = window.open('about:blank', '_blank');
+  if (!gmailWindow) {
+    $('#paystubEmailError').textContent = 'Your browser blocked the Gmail window. Allow pop-ups for this site, then try again.';
+    $('#paystubEmailError').hidden = false;
+    return;
+  }
+  gmailWindow.document.write('<p style="font-family:sans-serif;padding:24px">Preparing Gmail draft and downloading the paystub...</p>');
+  const result = await buildEmployeePaystub(row.person.id, true);
+  if (!result?.filename) {
+    gmailWindow.close();
+    return;
+  }
+  const template = selectedPaystubEmailTemplate();
+  const subject = fillPaystubEmailTemplate(template.subject, row);
+  const body = `${fillPaystubEmailTemplate(template.body, row)}\n\nAttachment reminder: ${result.filename}`;
+  const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&authuser=${encodeURIComponent(adminAccount.email)}&to=${encodeURIComponent(recipient)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  gmailWindow.location.replace(gmailUrl);
+  closePaystubEmailEditor();
+  showToast(`Gmail draft opened for ${row.person.name}. Attach the downloaded PDF before sending.`);
 }
 
 function closePayrollAdjustment() {
@@ -3546,6 +3730,21 @@ $('#payrollExport').onclick = () => {
   exportCsv(`sync2time-${selectedPayrollRole}-payroll-${isoDate(start)}-to-${isoDate(end)}.csv`, csv, `${selectedPayrollRole} payroll exported.`);
 };
 $('#sendPaystubs').onclick = sendApprovedPaystubs;
+$('#managePaystubTemplates').onclick = () => openPaystubEmailEditor();
+$('#paystubEmailForm').onsubmit = openManualPaystubGmail;
+$('#paystubEmailClose').onclick = closePaystubEmailEditor;
+$('#paystubEmailCancel').onclick = closePaystubEmailEditor;
+$('#paystubEmailBackdrop').onclick = event => {
+  if (event.target === event.currentTarget) closePaystubEmailEditor();
+};
+$('#paystubEmailTemplate').onchange = event => {
+  selectedPaystubEmailTemplateId = event.target.value;
+  localStorage.setItem('sync2time-paystub-email-template-selected', selectedPaystubEmailTemplateId);
+  loadPaystubEmailTemplateEditor();
+};
+$('#newPaystubEmailTemplate').onclick = addPaystubEmailTemplate;
+$('#savePaystubEmailTemplate').onclick = savePaystubEmailTemplate;
+$('#deletePaystubEmailTemplate').onclick = deletePaystubEmailTemplate;
 
 function csvCell(value) {
   return `"${String(value ?? '').replaceAll('"', '""')}"`;
@@ -3853,6 +4052,12 @@ document.body.addEventListener('click', async event => {
   if (paystub) {
     event.stopPropagation();
     await buildEmployeePaystub(paystub.dataset.paystub);
+    return;
+  }
+  const emailPaystub = event.target.closest('[data-email-paystub]');
+  if (emailPaystub) {
+    event.stopPropagation();
+    openPaystubEmailEditor(emailPaystub.dataset.emailPaystub);
     return;
   }
   const deleteTime = event.target.closest('[data-delete-time]');
