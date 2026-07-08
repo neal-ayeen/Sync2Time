@@ -394,21 +394,6 @@ function rosterSource() {
       person.name?.toLowerCase() === rosterEmployee.name.toLowerCase()
     );
     if (!profileEmployee) return rosterEmployee;
-    if (rosterEmployee.name === 'Claudine Angelica Pia D. San Juan') {
-      return {
-        ...profileEmployee,
-        ...rosterEmployee,
-        id: profileEmployee.id || rosterEmployee.id,
-        email: 'claudine.sanjuan@sync2va.com',
-        role: 'Head Coach',
-        department: 'Intensive Course Dept',
-        scheduledStart: 1140,
-        scheduledEnd: 1260,
-        schedule: '7:00 PM-9:00 PM',
-        rate: 5,
-        rateType: 'Hourly USD'
-      };
-    }
     return {
       ...rosterEmployee,
       ...profileEmployee,
@@ -2979,13 +2964,17 @@ $('#employeeForm').onsubmit = async event => {
   const rateType = $('#employeeRateType').value || '';
   const scheduledStart = timeInputToMinutes($('#employeeScheduleStart').value);
   const scheduledEnd = timeInputToMinutes($('#employeeScheduleEnd').value);
-  const duplicate = managedEmployees.find(item => item.email === email && item.id !== editingEmployeeId);
+  const editableRecords = editableEmployeeRecords();
+  const old = editableRecords.find(item => item.id === editingEmployeeId) || managedEmployees.find(item => item.id === editingEmployeeId);
+  const duplicate = editableRecords.find(item =>
+    item.email?.toLowerCase() === email &&
+    item.id !== editingEmployeeId
+  );
   if (duplicate) {
     $('#employeeFormError').textContent = 'That email already has employee access.';
     $('#employeeFormError').hidden = false;
     return;
   }
-  const old = managedEmployees.find(item => item.id === editingEmployeeId);
   const record = {
     id: editingEmployeeId || crypto.randomUUID(),
     name,
@@ -3016,8 +3005,17 @@ $('#employeeForm').onsubmit = async event => {
   }
   const storedRecord = { ...record };
   delete storedRecord.newPassword;
-  if (old) managedEmployees = managedEmployees.map(item => item.id === old.id ? storedRecord : item);
-  else managedEmployees.push(storedRecord);
+  const storedIndex = managedEmployees.findIndex(item =>
+    item.id === storedRecord.id ||
+    item.id === old?.id ||
+    item.email?.toLowerCase() === old?.email?.toLowerCase() ||
+    item.email?.toLowerCase() === storedRecord.email
+  );
+  if (storedIndex >= 0) {
+    managedEmployees = managedEmployees.map((item, index) => index === storedIndex ? storedRecord : item);
+  } else {
+    managedEmployees.push(storedRecord);
+  }
   persistEmployees();
   renderManagedEmployees();
   renderTeamDirectory();
