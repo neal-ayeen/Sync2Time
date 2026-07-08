@@ -123,6 +123,7 @@ let currentEmployeeReportRows = [];
 let selectedPayrollRole = 'coaches';
 let editingPayrollRow = null;
 let editingPayrollAdjustment = null;
+let editingQuickHoursRow = null;
 let deletedNoticeRepairAttempted = false;
 let approvedTimeEditRepairAttempted = false;
 let editingEmployeeId = null;
@@ -2155,6 +2156,8 @@ function payrollAdjustmentValues(person, start, end) {
   const adjustment = adjustmentFor(person.id, start, end);
   return {
     record: adjustment,
+    deductedHours: Math.max(0, Number(adjustment?.deducted_hours ?? adjustment?.deductedHours ?? 0)),
+    deductedAmount: Math.max(0, Number(adjustment?.deducted_amount ?? adjustment?.deductedAmount ?? 0)),
     adjustment: Number(adjustment?.adjustment_php ?? adjustment?.adjustmentPhp ?? 0),
     deductions: Number(adjustment?.deductions_php ?? adjustment?.deductionsPhp ?? 0),
     commission: Number(adjustment?.commission_php ?? adjustment?.commissionPhp ?? adjustment?.commission ?? 0),
@@ -2190,6 +2193,11 @@ function buildPayrollRows() {
     const monthEnd = businessDateFromKey(`${startKey.slice(0, 7)}-${pad(businessMonthLastDay(Number(startKey.slice(0, 4)), Number(startKey.slice(5, 7))))}`);
     const dailyRate = monthlyPhp / Math.max(1, weekdayCount(monthStart, monthEnd));
     const otPay = otHours * (dailyRate / 8) * 1.25;
+    const hourlyDeductionRatePhp = monthlyPhp ? dailyRate / 8 : hourlyUsd * fx;
+    const hourDeductionPhp = values.deductedHours * hourlyDeductionRatePhp;
+    const amountDeductionPhp = selectedPayrollRole === 'coaches' || (!monthlyPhp && hourlyUsd) ? values.deductedAmount * fx : values.deductedAmount;
+    const quickDeductionPhp = hourDeductionPhp + amountDeductionPhp;
+    const payableHours = Math.max(0, actualHours - values.deductedHours);
     let grossUsd = 0;
     let grossPhp = 0;
     if (selectedPayrollRole === 'coaches') {
@@ -2202,11 +2210,29 @@ function buildPayrollRows() {
     } else if (selectedPayrollRole === 'other') {
       grossPhp = monthlyPhp ? cutoffPay : (actualHours + otHours) * hourlyUsd * fx;
     }
-    const netPay = selectedPayrollRole === 'coaches'
-      ? grossPhp + values.adjustment
-      : grossPhp + values.deductions + values.commission;
-    return { person, expectedHours, actualHours, otHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, ...values };
+    const calculatedNetPay = selectedPayrollRole === 'coaches'
+      ? grossPhp + values.adjustment - quickDeductionPhp
+      : grossPhp + values.deductions + values.commission - quickDeductionPhp;
+    const netPay = Math.max(0, calculatedNetPay);
+    return { person, expectedHours, actualHours, otHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, ...values };
   });
+}
+
+function payrollHourChip(row) {
+  const deducted = Number(row.deductedHours || 0);
+  const payable = Number(row.payableHours ?? row.actualHours);
+  const note = deducted > 0
+    ? `Deducted ${deducted.toFixed(2)}h · payable ${payable.toFixed(2)}h`
+    : 'Click to quickly deduct hours';
+  return `<button type="button" class="payroll-hour-chip" data-quick-hours="${escapeHtml(row.person.id)}" title="${escapeHtml(note)}"><b>${row.actualHours.toFixed(2)}</b>${deducted > 0 ? `<small>Payable ${payable.toFixed(2)}</small>` : '<small>Click to edit</small>'}</button>`;
+}
+
+function payrollAdjustmentStack(row, baseAmount, label = 'Manual') {
+  const parts = [];
+  if (Number(row.deductedHours || 0) > 0) parts.push(`-${row.deductedHours.toFixed(2)}h`);
+  if (Number(row.quickDeductionPhp || 0) > 0) parts.push(`-${phpMoney(row.quickDeductionPhp)}`);
+  const details = parts.length ? parts.join(' · ') : 'No hour deduction';
+  return `<span class="payroll-money payroll-adjustment-stack" title="${escapeHtml(row.note || details)}">${phpMoney(baseAmount)}<small>${escapeHtml(details)}${row.note ? ` · ${escapeHtml(row.note)}` : ''}</small></span>`;
 }
 
 function renderPayroll() {
@@ -2235,17 +2261,17 @@ function renderPayroll() {
     const recipient = paystubRecipients.find(item => item.employee_id === row.person.id);
     const person = `<div class="person"><span class="person-avatar" style="background:${row.person.color}">${row.person.initials}</span><span>${escapeHtml(row.person.name)}<small>${escapeHtml(row.person.role)}</small><small>${recipient ? `Paystub: ${escapeHtml(recipient.recipient_email)}` : 'No paystub recipient'}</small></span></div>`;
     const approvalLabel = row.paystubApproved ? 'Approved' : 'Approve';
-    const edit = `<span class="payroll-actions"><button class="approve-paystub-btn ${row.paystubApproved ? 'approved' : ''}" data-approve-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="No paystub recipient"'}>${approvalLabel}</button><button class="edit-adjustment-btn" data-payroll-edit="${row.person.id}">Edit</button><button class="edit-adjustment-btn" data-payroll-recipient="${row.person.id}">Recipient</button><button class="paystub-btn" data-paystub="${row.person.id}">Paystub</button><button class="manual-email-btn" data-email-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="Add a paystub recipient first"'}>Email</button></span>`;
-    if (selectedPayrollRole === 'coaches') return `<div class="payroll-row coaches">${person}<span>${row.expectedHours.toFixed(2)}</span><span>${row.actualHours.toFixed(2)}</span><span>${row.otHours.toFixed(2)}</span><span>$${row.hourlyUsd.toFixed(2)}</span><span>₱${fx.toFixed(4)}</span><span class="payroll-money">$${row.grossUsd.toFixed(2)}</span><span class="payroll-money">${phpMoney(row.grossPhp)}</span><span class="payroll-money" title="${escapeHtml(row.note)}">${phpMoney(row.adjustment)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
-    if (selectedPayrollRole === 'admin') return `<div class="payroll-row admin">${person}<span>${row.expectedHours.toFixed(2)}</span><span>${row.actualHours.toFixed(2)}</span><span>${row.otHours.toFixed(2)}</span><span class="payroll-money">${phpMoney(row.cutoffPay)}</span><span class="payroll-money">${phpMoney(row.otPay)}</span><span class="payroll-money">${phpMoney(row.deductions)}</span><span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
-    return `<div class="payroll-row ${selectedPayrollRole}">${person}<span class="payroll-money">${phpMoney(row.grossPhp)}</span><span class="payroll-money">${phpMoney(row.deductions)}</span><span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
+    const edit = `<span class="payroll-actions"><button class="approve-paystub-btn ${row.paystubApproved ? 'approved' : ''}" data-approve-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="No paystub recipient"'}>${approvalLabel}</button><button class="quick-hours-btn" data-quick-hours="${row.person.id}">Hours</button><button class="edit-adjustment-btn" data-payroll-edit="${row.person.id}">Edit</button><button class="edit-adjustment-btn" data-payroll-recipient="${row.person.id}">Recipient</button><button class="paystub-btn" data-paystub="${row.person.id}">Paystub</button><button class="manual-email-btn" data-email-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="Add a paystub recipient first"'}>Email</button></span>`;
+    if (selectedPayrollRole === 'coaches') return `<div class="payroll-row coaches">${person}<span>${row.expectedHours.toFixed(2)}</span>${payrollHourChip(row)}<span>${row.otHours.toFixed(2)}</span><span>$${row.hourlyUsd.toFixed(2)}</span><span>₱${fx.toFixed(4)}</span><span class="payroll-money">$${row.grossUsd.toFixed(2)}</span><span class="payroll-money">${phpMoney(row.grossPhp)}</span>${payrollAdjustmentStack(row, row.adjustment)}<b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
+    if (selectedPayrollRole === 'admin') return `<div class="payroll-row admin">${person}<span>${row.expectedHours.toFixed(2)}</span>${payrollHourChip(row)}<span>${row.otHours.toFixed(2)}</span><span class="payroll-money">${phpMoney(row.cutoffPay)}</span><span class="payroll-money">${phpMoney(row.otPay)}</span>${payrollAdjustmentStack(row, row.deductions, 'Deductions')}<span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
+    return `<div class="payroll-row ${selectedPayrollRole}">${person}<span class="payroll-money">${phpMoney(row.grossPhp)}</span>${payrollAdjustmentStack(row, row.deductions, 'Deductions')}<span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
   }).join('') || '<div class="empty-state">No employees are assigned to this role group.</div>';
   $('#payrollEmployeeCount').textContent = currentPayrollRows.length;
   $('#payrollActualHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.actualHours * 3600, 0));
   $('#payrollOtHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.otHours * 3600, 0));
   $('#payrollNetPay').textContent = phpMoney(currentPayrollRows.reduce((sum, row) => sum + row.netPay, 0));
   $('#payrollRangeLabel').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${selectedPayrollRole.toUpperCase()}`;
-  $('#payrollFooterHint').textContent = 'Click Edit or Recipient to update payroll values and the paystub destination email.';
+  $('#payrollFooterHint').textContent = 'Click Actual Hrs or Hours to deduct time quickly. Click Edit for money adjustments, commissions, and paystub email.';
   const approvedCount = currentPayrollRows.filter(row => row.paystubApproved).length;
   const recipientCount = currentPayrollRows.filter(row => paystubRecipients.some(item => item.employee_id === row.person.id)).length;
   const ready = currentPayrollRows.length > 0 && approvedCount === currentPayrollRows.length && recipientCount === currentPayrollRows.length;
@@ -2306,23 +2332,33 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
   if (selectedPayrollRole === 'coaches') {
     lines.push(['Expected hours', row.expectedHours.toFixed(2)]);
     lines.push(['Actual hours', row.actualHours.toFixed(2)]);
+    lines.push(['Payable hours', row.payableHours.toFixed(2)]);
+    lines.push(['Deducted hours', row.deductedHours.toFixed(2)]);
     lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
     lines.push(['USD hourly rate', `USD ${row.hourlyUsd.toFixed(2)}`]);
     lines.push(['USD to PHP rate', payrollUsdPhpRate().toFixed(4)]);
     lines.push(['Gross USD pay', `USD ${row.grossUsd.toFixed(2)}`]);
     lines.push(['Gross PHP pay', `PHP ${row.grossPhp.toFixed(2)}`]);
+    lines.push(['Hour deduction', `PHP ${row.quickDeductionPhp.toFixed(2)}`]);
     lines.push(['Adjustments', `PHP ${row.adjustment.toFixed(2)}`]);
   } else if (selectedPayrollRole === 'admin') {
     lines.push(['Expected hours', row.expectedHours.toFixed(2)]);
     lines.push(['Actual hours', row.actualHours.toFixed(2)]);
+    lines.push(['Payable hours', row.payableHours.toFixed(2)]);
+    lines.push(['Deducted hours', row.deductedHours.toFixed(2)]);
     lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
     lines.push(['Cutoff pay', `PHP ${row.cutoffPay.toFixed(2)}`]);
     lines.push(['OT pay', `PHP ${row.otPay.toFixed(2)}`]);
     lines.push(['Gross pay', `PHP ${row.grossPhp.toFixed(2)}`]);
+    lines.push(['Hour deduction', `PHP ${row.quickDeductionPhp.toFixed(2)}`]);
     lines.push(['Deductions', `PHP ${row.deductions.toFixed(2)}`]);
     lines.push(['Commission', `PHP ${row.commission.toFixed(2)}`]);
   } else {
     lines.push(['Gross pay', `PHP ${row.grossPhp.toFixed(2)}`]);
+    lines.push(['Actual hours', row.actualHours.toFixed(2)]);
+    lines.push(['Payable hours', row.payableHours.toFixed(2)]);
+    lines.push(['Deducted hours', row.deductedHours.toFixed(2)]);
+    lines.push(['Hour deduction', `PHP ${row.quickDeductionPhp.toFixed(2)}`]);
     lines.push(['Deductions', `PHP ${row.deductions.toFixed(2)}`]);
     lines.push(['Commission', `PHP ${row.commission.toFixed(2)}`]);
   }
@@ -2651,6 +2687,108 @@ function openPayrollRowEditor(employeeId) {
 function closePayrollRowEditor() {
   $('#payrollRowBackdrop').hidden = true;
   editingPayrollRow = null;
+}
+
+function closeQuickHoursEditor() {
+  $('#quickHoursBackdrop').hidden = true;
+  editingQuickHoursRow = null;
+  $('#quickHoursError').hidden = true;
+}
+
+function quickHoursPreviewText(row, deductHours) {
+  const rate = Number(row.hourlyDeductionRatePhp || 0);
+  const pesoDeduction = Math.max(0, Number(deductHours || 0)) * rate;
+  if (!rate) return `${Number(deductHours || 0).toFixed(2)}h will be deducted. No hourly payroll rate is available, so net pay will not change automatically.`;
+  const rateSource = row.monthlyPhp ? 'PHP hourly equivalent from monthly rate' : 'USD hourly rate converted to PHP';
+  return `${Number(deductHours || 0).toFixed(2)}h × ${phpMoney(rate)} ${rateSource} = -${phpMoney(pesoDeduction)} from net pay.`;
+}
+
+function syncQuickHoursInputs(mode = 'deduct') {
+  if (!editingQuickHoursRow) return;
+  const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
+  if (mode === 'payable') {
+    const payable = Math.min(actual, Math.max(0, Number($('#quickPayableHours').value) || 0));
+    const deduct = Math.max(0, actual - payable);
+    $('#quickPayableHours').value = payable.toFixed(2);
+    $('#quickDeductHours').value = deduct.toFixed(2);
+  } else {
+    const deduct = Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
+    const payable = Math.max(0, actual - deduct);
+    $('#quickDeductHours').value = deduct.toFixed(2);
+    $('#quickPayableHours').value = payable.toFixed(2);
+  }
+  $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, $('#quickDeductHours').value);
+}
+
+function openQuickHoursEditor(employeeId) {
+  const row = currentPayrollRows.find(item => item.person.id === employeeId);
+  if (!row) return showToast('Payroll row not found.');
+  const { start, end } = payrollRange();
+  editingQuickHoursRow = row;
+  $('#quickHoursEmployee').textContent = row.person.name;
+  $('#quickHoursPeriod').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${row.person.role}`;
+  $('#quickActualHours').value = row.actualHours.toFixed(2);
+  $('#quickDeductHours').value = Number(row.deductedHours || 0).toFixed(2);
+  $('#quickPayableHours').value = Math.max(0, Number(row.payableHours ?? row.actualHours)).toFixed(2);
+  $('#quickHoursNote').value = row.note || '';
+  $('#quickDeductionPreview').textContent = quickHoursPreviewText(row, row.deductedHours || 0);
+  $('#quickHoursError').hidden = true;
+  $('#quickHoursBackdrop').hidden = false;
+  $('#quickPayableHours').focus();
+  $('#quickPayableHours').select();
+}
+
+async function saveQuickHoursAdjustment(event) {
+  event.preventDefault();
+  if (!editingQuickHoursRow) return;
+  const row = editingQuickHoursRow;
+  const { start, end } = payrollRange();
+  const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
+  const deductedHours = Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
+  const note = $('#quickHoursNote').value.trim();
+  if (deductedHours > 0 && !note) {
+    $('#quickHoursError').textContent = 'Add a reason or note before saving a deducted hour adjustment.';
+    $('#quickHoursError').hidden = false;
+    return;
+  }
+  const existing = row.record || {};
+  const record = {
+    employee_id: row.person.id,
+    period_start: isoDate(start),
+    period_end: isoDate(end),
+    deducted_hours: deductedHours,
+    deducted_amount: Number(existing.deducted_amount ?? existing.deductedAmount ?? 0),
+    commission: Number(existing.commission ?? 0),
+    adjustment_php: Number(existing.adjustment_php ?? existing.adjustmentPhp ?? row.adjustment ?? 0),
+    deductions_php: Number(existing.deductions_php ?? existing.deductionsPhp ?? row.deductions ?? 0),
+    commission_php: Number(existing.commission_php ?? existing.commissionPhp ?? row.commission ?? 0),
+    cutoff_pay_override: existing.cutoff_pay_override ?? existing.cutoffPayOverride ?? null,
+    gross_pay_override: existing.gross_pay_override ?? existing.grossPayOverride ?? null,
+    paystub_approved: false,
+    approved_at: null,
+    approved_by: null,
+    note,
+    updated_at: new Date().toISOString()
+  };
+  if (usesSupabase()) {
+    const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
+    if (error) {
+      $('#quickHoursError').textContent = `Could not save quick hours: ${error.message}`;
+      $('#quickHoursError').hidden = false;
+      return;
+    }
+    payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !(item.employee_id === data.employee_id && item.period_start === data.period_start && item.period_end === data.period_end));
+    payrollAdjustments.push(data);
+  } else {
+    payrollAdjustments = payrollAdjustments.filter(item => !((item.employeeId || item.employee_id) === record.employee_id && (item.periodStart || item.period_start) === record.period_start && (item.periodEnd || item.period_end) === record.period_end));
+    payrollAdjustments.push({ ...record, id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, deductedHours });
+    persistPayrollAdjustments();
+  }
+  closeQuickHoursEditor();
+  renderPayroll();
+  renderReports();
+  renderEmployeePayrollAdjustments();
+  showToast(`${row.person.name}'s payable hours were updated.`);
 }
 
 async function savePaystubRecipient(employeeId, email) {
@@ -3633,6 +3771,7 @@ document.addEventListener('keydown', event => {
   if (!$('#payrollAdjustmentBackdrop').hidden) closePayrollAdjustment();
   if (!$('#exportBackdrop').hidden) $('#exportBackdrop').hidden = true;
   if (!$('#payrollRowBackdrop').hidden) closePayrollRowEditor();
+  if (!$('#quickHoursBackdrop').hidden) closeQuickHoursEditor();
 });
 
 $('#employeeSearch').oninput = renderAttendance;
@@ -3734,18 +3873,20 @@ $('#payrollExport').onclick = () => {
   let header;
   let rows;
   if (selectedPayrollRole === 'coaches') {
-    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Approved OT Hours', 'USD Hourly Rate', 'PHP Rate', 'Gross USD Pay', 'Gross PHP Pay', 'Adjustments PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.otHours.toFixed(2), row.hourlyUsd.toFixed(2), payrollUsdPhpRate().toFixed(4), row.grossUsd.toFixed(2), row.grossPhp.toFixed(2), row.adjustment.toFixed(2), row.netPay.toFixed(2), row.note]);
+    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Deducted Hours', 'Approved OT Hours', 'USD Hourly Rate', 'PHP Rate', 'Gross USD Pay', 'Gross PHP Pay', 'Hour Deduction PHP', 'Manual Adjustments PHP', 'Net Pay PHP', 'Notes'];
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.hourlyUsd.toFixed(2), payrollUsdPhpRate().toFixed(4), row.grossUsd.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.netPay.toFixed(2), row.note]);
   } else if (selectedPayrollRole === 'admin') {
-    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Approved OT Hours', 'Cutoff Pay PHP', 'OT Pay PHP', 'Gross Pay PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.otHours.toFixed(2), row.cutoffPay.toFixed(2), row.otPay.toFixed(2), row.grossPhp.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
+    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Deducted Hours', 'Approved OT Hours', 'Cutoff Pay PHP', 'OT Pay PHP', 'Gross Pay PHP', 'Hour Deduction PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.cutoffPay.toFixed(2), row.otPay.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
   } else {
-    header = ['Employee', 'Role', 'Gross Pay PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.grossPhp.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
+    header = ['Employee', 'Role', 'Actual Hours', 'Payable Hours', 'Deducted Hours', 'Gross Pay PHP', 'Hour Deduction PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
   }
   const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
   exportCsv(`sync2time-${selectedPayrollRole}-payroll-${isoDate(start)}-to-${isoDate(end)}.csv`, csv, `${selectedPayrollRole} payroll exported.`);
 };
+$('#payrollScrollLeft').onclick = () => $('#payrollTableScroll').scrollBy({ left: -520, behavior: 'smooth' });
+$('#payrollScrollRight').onclick = () => $('#payrollTableScroll').scrollBy({ left: 520, behavior: 'smooth' });
 $('#sendPaystubs').onclick = sendApprovedPaystubs;
 $('#managePaystubTemplates').onclick = () => openPaystubEmailEditor();
 $('#paystubEmailForm').onsubmit = openManualPaystubGmail;
@@ -3991,6 +4132,14 @@ $('#payrollRowCancel').onclick = closePayrollRowEditor;
 $('#payrollRowBackdrop').onclick = event => {
   if (event.target === event.currentTarget) closePayrollRowEditor();
 };
+$('#quickHoursForm').onsubmit = saveQuickHoursAdjustment;
+$('#quickHoursClose').onclick = closeQuickHoursEditor;
+$('#quickHoursCancel').onclick = closeQuickHoursEditor;
+$('#quickHoursBackdrop').onclick = event => {
+  if (event.target === event.currentTarget) closeQuickHoursEditor();
+};
+$('#quickPayableHours').oninput = () => syncQuickHoursInputs('payable');
+$('#quickDeductHours').oninput = () => syncQuickHoursInputs('deduct');
 $('#exportClose').onclick = () => { $('#exportBackdrop').hidden = true; };
 $('#exportBackdrop').onclick = event => {
   if (event.target === event.currentTarget) $('#exportBackdrop').hidden = true;
@@ -4045,6 +4194,12 @@ document.body.addEventListener('click', async event => {
   if (adjustmentButton) {
     event.stopPropagation();
     openPayrollAdjustment(adjustmentButton.dataset.editAdjustment);
+    return;
+  }
+  const quickHours = event.target.closest('[data-quick-hours]');
+  if (quickHours) {
+    event.stopPropagation();
+    openQuickHoursEditor(quickHours.dataset.quickHours);
     return;
   }
   const payrollEdit = event.target.closest('[data-payroll-edit]');
