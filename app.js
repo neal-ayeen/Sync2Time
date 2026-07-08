@@ -1146,6 +1146,19 @@ function parseEmployeeRate(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isEdgeFunctionRequestFailure(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('failed to send a request') ||
+    message.includes('failed to fetch') ||
+    message.includes('network') ||
+    message.includes('not found') ||
+    message.includes('functions/v1');
+}
+
+function edgeFunctionDeployMessage(functionName = 'admin-save-employee') {
+  return `Supabase Edge Function "${functionName}" is not deployed or reachable. Deploy outputs/supabase/functions/${functionName}/index.ts in Supabase Edge Functions, then refresh the website.`;
+}
+
 function editableEmployeeRecords() {
   const byEmail = new Map();
   rosterSource().forEach(person => {
@@ -1188,6 +1201,72 @@ function editableEmployeeRecords() {
   return [...byEmail.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
+async function updateSupabaseEmployeeProfileDirect(record) {
+  if (!supabaseClient || currentProfile?.role !== 'admin') return { ok: false, error: 'Admin Supabase session required.' };
+  if (!isUuid(record.id)) return { ok: false, error: 'This employee does not have a real Supabase profile ID yet.' };
+  const existingProfile = supabaseProfiles.find(profile =>
+    profile.id === record.id ||
+    profile.email?.toLowerCase() === record.email?.toLowerCase() ||
+    profile.full_name?.toLowerCase() === record.name?.toLowerCase()
+  );
+  const payload = {
+    email: record.email,
+    full_name: record.name,
+    role: existingProfile?.role === 'admin' ? 'admin' : 'employee',
+    job_role: record.jobRole,
+    department: record.department || '',
+    rate: record.rate,
+    rate_type: record.rateType || '',
+    schedule_start: minutesToSupabaseTime(record.scheduledStart),
+    schedule_end: minutesToSupabaseTime(record.scheduledEnd),
+    project: record.task || '',
+    task: record.task || ''
+  };
+  const attempts = [
+    payload,
+    Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'project')),
+    Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'task')),
+    Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'project' && key !== 'task'))
+  ];
+  let profileData = null;
+  let lastError = null;
+  for (const attempt of attempts) {
+    const { data, error } = await supabaseClient
+      .from('profiles')
+      .update(attempt)
+      .eq('id', record.id)
+      .select('*')
+      .single();
+    if (!error) {
+      profileData = data;
+      lastError = null;
+      break;
+    }
+    lastError = error;
+    const message = error.message || '';
+    if (!message.includes('project') && !message.includes('task')) break;
+  }
+  if (lastError) return { ok: false, error: lastError.message || 'Direct profile update failed.' };
+  const { data: recipientData, error: recipientError } = await supabaseClient
+    .from('paystub_recipients')
+    .upsert({
+      employee_id: record.id,
+      recipient_email: record.paystubEmail || record.email,
+      source_note: 'Sync2Time admin access',
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'employee_id' })
+    .select('recipient_email')
+    .single();
+  if (recipientError) return { ok: false, error: `Profile saved, but paystub email failed: ${recipientError.message}` };
+  return {
+    ok: true,
+    employeeId: record.id,
+    recipientEmail: recipientData?.recipient_email || record.paystubEmail || record.email,
+    profile: profileData,
+    warning: 'Employee profile updated. Password and sign-in email changes still require the Supabase Edge Function.'
+  };
+}
+
 async function upsertSupabaseEmployee(record) {
   if (!supabaseClient || currentProfile?.role !== 'admin') return { ok: false, error: 'Admin Supabase session required.' };
   const payload = {
@@ -1204,8 +1283,32 @@ async function upsertSupabaseEmployee(record) {
     password: record.newPassword || '',
     paystubEmail: record.paystubEmail || record.email
   };
-  const { data, error } = await supabaseClient.functions.invoke('admin-save-employee', { body: payload });
-  if (error || !data?.ok) return { ok: false, error: error?.message || data?.error || 'Unable to save employee to Supabase.' };
+  const previousEmail = String(record.previousEmail || record.email || '').toLowerCase();
+  const emailChanged = previousEmail && previousEmail !== record.email;
+  const passwordChanged = Boolean(record.newPassword);
+  let data = null;
+  let error = null;
+  try {
+    const response = await supabaseClient.functions.invoke('admin-save-employee', { body: payload });
+    data = response.data;
+    error = response.error;
+  } catch (requestError) {
+    error = requestError;
+  }
+  if (error || !data?.ok) {
+    if (isEdgeFunctionRequestFailure(error) && isUuid(record.id) && !emailChanged && !passwordChanged) {
+      const directResult = await updateSupabaseEmployeeProfileDirect(record);
+      if (directResult.ok) return directResult;
+      return {
+        ok: false,
+        error: `${edgeFunctionDeployMessage('admin-save-employee')} Direct profile fallback also failed: ${directResult.error}`
+      };
+    }
+    const functionMessage = isEdgeFunctionRequestFailure(error)
+      ? edgeFunctionDeployMessage('admin-save-employee')
+      : (error?.message || data?.error || 'Unable to save employee to Supabase.');
+    return { ok: false, error: functionMessage };
+  }
   return { ok: true, ...data };
 }
 
@@ -2546,11 +2649,13 @@ function openEmployeeForm(employee) {
     $('#employeeScheduleStart').value = minutesToTimeInput(source.scheduledStart);
     $('#employeeScheduleEnd').value = minutesToTimeInput(source.scheduledEnd);
     $('#employeePassword').value = source.tempPassword || '';
+    $('#employeePassword').dataset.originalPassword = source.tempPassword || '';
     $('#employeePassword').placeholder = 'Leave blank to keep current password';
   } else {
     $('#employeeProject').value = taskOptions[0];
     $('#employeeRateType').value = 'Hourly USD';
     $('#employeePassword').value = randomPassword();
+    $('#employeePassword').dataset.originalPassword = '';
     $('#employeePassword').placeholder = 'Create a temporary password';
   }
   $('#employeeModalBackdrop').hidden = false;
@@ -2966,6 +3071,8 @@ $('#employeeForm').onsubmit = async event => {
   const scheduledEnd = timeInputToMinutes($('#employeeScheduleEnd').value);
   const editableRecords = editableEmployeeRecords();
   const old = editableRecords.find(item => item.id === editingEmployeeId) || managedEmployees.find(item => item.id === editingEmployeeId);
+  const originalPassword = $('#employeePassword').dataset.originalPassword || '';
+  const passwordChanged = !old ? Boolean(password) : Boolean(password && password !== originalPassword);
   const duplicate = editableRecords.find(item =>
     item.email?.toLowerCase() === email &&
     item.id !== editingEmployeeId
@@ -2984,8 +3091,9 @@ $('#employeeForm').onsubmit = async event => {
     department,
     initials: initials(name),
     tempPassword: password || old?.tempPassword || randomPassword(),
-    newPassword: password || '',
-    hash: password ? await hashPassword(password) : old?.hash,
+    previousEmail: old?.email || email,
+    newPassword: passwordChanged ? password : '',
+    hash: passwordChanged ? await hashPassword(password) : old?.hash,
     rate,
     rateType,
     scheduledStart,
@@ -2999,12 +3107,15 @@ $('#employeeForm').onsubmit = async event => {
       $('#employeeFormError').hidden = false;
       return;
     }
+    record.saveWarning = result.warning || '';
     record.id = result.employeeId || record.id;
     record.paystubEmail = result.recipientEmail || record.paystubEmail;
     await refreshSupabaseData();
   }
   const storedRecord = { ...record };
   delete storedRecord.newPassword;
+  delete storedRecord.previousEmail;
+  delete storedRecord.saveWarning;
   const storedIndex = managedEmployees.findIndex(item =>
     item.id === storedRecord.id ||
     item.id === old?.id ||
@@ -3020,7 +3131,7 @@ $('#employeeForm').onsubmit = async event => {
   renderManagedEmployees();
   renderTeamDirectory();
   closeEmployeeForm();
-  showToast(old ? 'Employee access updated.' : 'Employee access created.');
+  showToast(record.saveWarning || (old ? 'Employee access updated.' : 'Employee access created.'));
 };
 
 $('#leaveForm').onsubmit = async event => {
