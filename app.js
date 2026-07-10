@@ -105,6 +105,7 @@ let supabaseDeletedTimeEntries = [];
 let sharedSettings = {};
 let deletedTimeAlerts = JSON.parse(localStorage.getItem('sync2time-deleted-time-alerts') || '[]');
 let payrollAdjustments = JSON.parse(localStorage.getItem('sync2time-payroll-adjustments') || '[]');
+let payrollAdjustmentEvents = JSON.parse(localStorage.getItem('sync2time-payroll-adjustment-events') || '[]');
 let paystubRecipients = JSON.parse(localStorage.getItem('sync2time-paystub-recipients') || '[]');
 const DEFAULT_ROLE_HOUR_RULES = [
   { role_name: 'Admin', daily_hour_limit: 8, weekly_hour_limit: 40, allowed_days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], is_flexible: false, requires_ot_approval: true },
@@ -474,6 +475,10 @@ function persistPayrollAdjustments() {
   localStorage.setItem('sync2time-payroll-adjustments', JSON.stringify(payrollAdjustments));
 }
 
+function persistPayrollAdjustmentEvents() {
+  localStorage.setItem('sync2time-payroll-adjustment-events', JSON.stringify(payrollAdjustmentEvents));
+}
+
 function persistPaystubRecipients() {
   localStorage.setItem('sync2time-paystub-recipients', JSON.stringify(paystubRecipients));
 }
@@ -749,6 +754,20 @@ async function loadPayrollAdjustments() {
   if (!error) payrollAdjustments = data || [];
 }
 
+async function loadPayrollAdjustmentEvents() {
+  if (!usesSupabase()) return;
+  const { data, error } = await supabaseClient
+    .from('payroll_adjustment_events')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.warn('Payroll adjustment history unavailable:', error.message);
+    return;
+  }
+  payrollAdjustmentEvents = data || [];
+  persistPayrollAdjustmentEvents();
+}
+
 async function loadRoleHourRules() {
   if (!usesSupabase()) return;
   const { data, error } = await supabaseClient
@@ -1022,6 +1041,7 @@ async function refreshSupabaseData() {
   await loadSupabaseLivePresence();
   await loadSupabaseTimeEntries();
   await loadPayrollAdjustments();
+  await loadPayrollAdjustmentEvents();
   await loadRoleHourRules();
   await loadOvertimeAlerts();
   await loadPaystubRecipients();
@@ -1098,7 +1118,13 @@ function subscribeSupabaseRealtime() {
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'payroll_adjustments' }, async () => {
       await loadPayrollAdjustments();
+      await loadPayrollAdjustmentEvents();
       renderReports();
+      renderPayroll();
+      renderEmployeePayrollAdjustments();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'payroll_adjustment_events' }, async () => {
+      await loadPayrollAdjustmentEvents();
       renderEmployeePayrollAdjustments();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'role_hour_rules' }, async () => {
@@ -2062,11 +2088,18 @@ function renderDeletedTimeAlerts() {
   $('#deletedTimeRows').innerHTML = ownAlerts.map(alert => `<div class="deleted-notice"><b>${escapeHtml(alert.title || 'Time entry deleted')}</b><small>${escapeHtml(alert.message || '')}</small><small>${businessDateTimeLabel(alert.createdAt || Date.now())}</small></div>`).join('') || '<div class="empty-state">No deleted time notices.</div>';
 }
 
+function payrollAdjustmentHistoryFor(employeeId) {
+  return payrollAdjustmentEvents
+    .filter(item => (item.employee_id || item.employeeId) === employeeId)
+    .sort((left, right) => new Date(right.created_at || right.createdAt || 0) - new Date(left.created_at || left.createdAt || 0));
+}
+
 function renderEmployeePayrollAdjustments() {
   if (!$('#employeeAdjustmentRows')) return;
   const employeeId = currentProfile?.id || currentAccount?.id;
+  const history = payrollAdjustmentHistoryFor(employeeId);
   const own = payrollAdjustments.filter(item => (item.employee_id || item.employeeId) === employeeId);
-  $('#employeeAdjustmentRows').innerHTML = own.map(item => {
+  const summaryHtml = own.map(item => {
     const from = item.period_start || item.periodStart;
     const to = item.period_end || item.periodEnd;
     const hours = Number(item.deducted_hours ?? item.deductedHours ?? 0);
@@ -2074,9 +2107,26 @@ function renderEmployeePayrollAdjustments() {
     const adjustmentPhp = Number(item.adjustment_php ?? item.adjustmentPhp ?? 0);
     const deductionsPhp = Number(item.deductions_php ?? item.deductionsPhp ?? 0);
     const commissionPhp = Number(item.commission_php ?? item.commissionPhp ?? 0);
-    const details = `Hours deducted: ${hours.toFixed(2)} | USD amount: ${money(amount)} | PHP adjustment: ${phpMoney(adjustmentPhp)} | Deductions: ${phpMoney(deductionsPhp)} | Commission: ${phpMoney(commissionPhp)}`;
-    return `<div class="payroll-adjustment-notice"><div><b>${escapeHtml(from)} to ${escapeHtml(to)}</b><small>${escapeHtml(details)}</small><small>${escapeHtml(item.note || 'No note provided')}</small></div><span class="access-state">Recorded</span></div>`;
-  }).join('') || '<div class="empty-state">No payroll adjustments.</div>';
+    const details = `Current summary | Hours deducted: ${hours.toFixed(2)}h | USD amount: ${money(amount)} | PHP adjustment: ${phpMoney(adjustmentPhp)} | Deductions: ${phpMoney(deductionsPhp)} | Commission: ${phpMoney(commissionPhp)}`;
+    return `<div class="payroll-adjustment-notice payroll-adjustment-summary-notice"><div><b>${escapeHtml(from)} to ${escapeHtml(to)}</b><small>${escapeHtml(details)}</small><small>${escapeHtml(item.note || 'No note provided')}</small></div><span class="access-state">Summary</span></div>`;
+  }).join('');
+  if (history.length) {
+    const historyHtml = history.map(item => {
+      const from = item.period_start || item.periodStart;
+      const to = item.period_end || item.periodEnd;
+      const actual = Number(item.actual_hours ?? item.actualHours ?? 0);
+      const previousPayable = Number(item.previous_payable_hours ?? item.previousPayableHours ?? 0);
+      const newPayable = Number(item.new_payable_hours ?? item.newPayableHours ?? 0);
+      const delta = Number(item.deducted_hours_delta ?? item.deductedHoursDelta ?? 0);
+      const total = Number(item.total_deducted_hours ?? item.totalDeductedHours ?? 0);
+      const createdAt = item.created_at || item.createdAt;
+      const details = `Actual: ${actual.toFixed(2)}h | Payable: ${previousPayable.toFixed(2)}h → ${newPayable.toFixed(2)}h | This edit: ${delta >= 0 ? '-' : '+'}${Math.abs(delta).toFixed(2)}h | Total deducted: ${total.toFixed(2)}h`;
+      return `<div class="payroll-adjustment-notice"><div><b>${escapeHtml(from)} to ${escapeHtml(to)}</b><small>${escapeHtml(details)}</small><small>${escapeHtml(item.note || 'No note provided')}</small><small>${createdAt ? businessDateTimeLabel(createdAt) : 'Recorded by admin'}</small></div><span class="access-state">Time edit</span></div>`;
+    }).join('');
+    $('#employeeAdjustmentRows').innerHTML = `${historyHtml}${summaryHtml}`;
+    return;
+  }
+  $('#employeeAdjustmentRows').innerHTML = summaryHtml || '<div class="empty-state">No payroll adjustments.</div>';
 }
 
 function durationSecondsFromLabel(label) {
@@ -2497,10 +2547,10 @@ function renderPayroll() {
   const approvedCount = currentPayrollRows.filter(row => row.paystubApproved).length;
   const recipientCount = currentPayrollRows.filter(row => paystubRecipients.some(item => item.employee_id === row.person.id)).length;
   const ready = currentPayrollRows.length > 0 && approvedCount === currentPayrollRows.length && recipientCount === currentPayrollRows.length;
-  $('#bulkPaystubTitle').textContent = ready ? `${selectedPayrollRole} paystubs are ready for manual Gmail` : 'Approve employees before manual Gmail sending';
-  $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · use the Email button beside each employee`;
-  $('#sendPaystubs').disabled = true;
-  $('#sendPaystubs').textContent = 'Use row Email';
+  $('#bulkPaystubTitle').textContent = ready ? `${selectedPayrollRole} paystubs are ready for bulk Gmail sending` : 'Approve all paystubs before bulk Gmail sending';
+  $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · sender: hr@sync2va.com`;
+  $('#sendPaystubs').disabled = !ready;
+  $('#sendPaystubs').textContent = ready ? 'Send approved paystubs' : 'Approve all first';
 }
 
 function loadPaystubLogo() {
@@ -2846,6 +2896,12 @@ async function savePayrollAdjustment(event) {
   const deductedAmount = Math.max(0, Number($('#deductAmount').value) || 0);
   const commission = Math.max(0, Number($('#commissionAmount').value) || 0);
   const note = $('#adjustmentNote').value.trim();
+  const previousAdjustment = adjustmentFor(editingPayrollAdjustment.employeeId, businessDateFromKey(editingPayrollAdjustment.start), businessDateFromKey(editingPayrollAdjustment.end));
+  const previousDeductedHours = Math.max(0, Number(previousAdjustment?.deducted_hours ?? previousAdjustment?.deductedHours ?? 0));
+  const actualHours = Math.max(0, Number(editingPayrollAdjustment.row?.seconds || 0) / 3600);
+  const previousPayableHours = Math.max(0, actualHours - previousDeductedHours);
+  const newPayableHours = Math.max(0, actualHours - deductedHours);
+  const deductedHoursDelta = deductedHours - previousDeductedHours;
   if ((deductedHours || deductedAmount || commission) && !note) {
     $('#payrollAdjustmentError').textContent = 'Add a reason or note for the payroll audit trail.';
     $('#payrollAdjustmentError').hidden = false;
@@ -2864,6 +2920,7 @@ async function savePayrollAdjustment(event) {
     approved_by: null,
     updated_at: new Date().toISOString()
   };
+  let savedAdjustmentId = previousAdjustment?.id || null;
   if (usesSupabase()) {
     const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
     if (error) {
@@ -2871,12 +2928,31 @@ async function savePayrollAdjustment(event) {
       $('#payrollAdjustmentError').hidden = false;
       return;
     }
+    savedAdjustmentId = data.id;
     payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !((item.employee_id === data.employee_id) && item.period_start === data.period_start && item.period_end === data.period_end));
     payrollAdjustments.push(data);
   } else {
     payrollAdjustments = payrollAdjustments.filter(item => !((item.employeeId === record.employee_id) && item.periodStart === record.period_start && item.periodEnd === record.period_end));
     payrollAdjustments.push({ id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, deductedHours, deductedAmount, commission, note, updatedAt: record.updated_at });
     persistPayrollAdjustments();
+  }
+  if (Math.abs(deductedHoursDelta) > 0.004 || note) {
+    await savePayrollAdjustmentEvent({
+      payrollAdjustmentId: savedAdjustmentId,
+      employeeId: editingPayrollAdjustment.employeeId,
+      periodStart: editingPayrollAdjustment.start,
+      periodEnd: editingPayrollAdjustment.end,
+      changeType: 'hours',
+      payrollRole: 'report',
+      actualHours,
+      previousPayableHours,
+      newPayableHours,
+      deductedHoursDelta,
+      totalDeductedHours: deductedHours,
+      deductedAmountDelta: deductedAmount,
+      commissionPhpDelta: commission,
+      note
+    });
   }
   closePayrollAdjustment();
   renderReports();
@@ -2924,6 +3000,24 @@ function closeQuickHoursEditor() {
   $('#quickHoursError').hidden = true;
 }
 
+function enhanceQuickHoursEditor() {
+  const actualInput = $('#quickActualHours');
+  const payableInput = $('#quickPayableHours');
+  const deductInput = $('#quickDeductHours');
+  if (!actualInput || !payableInput || !deductInput) return;
+  const actualLabel = actualInput.closest('label');
+  const payableLabel = payableInput.closest('label');
+  const deductLabel = deductInput.closest('label');
+  if (payableLabel?.firstChild) payableLabel.firstChild.textContent = 'New payable hours';
+  if (deductLabel?.firstChild) deductLabel.firstChild.textContent = 'Total deducted after save';
+  if (!$('#quickCurrentPayableHours') && actualLabel) {
+    actualLabel.insertAdjacentHTML('afterend', '<label>Current payable hours<input id="quickCurrentPayableHours" type="number" readonly></label>');
+  }
+  if (!$('#quickAddDeductHours') && payableLabel) {
+    payableLabel.insertAdjacentHTML('beforebegin', '<label>Deduct this edit<input id="quickAddDeductHours" type="number" min="0" step="0.01" placeholder="0.50"></label>');
+  }
+}
+
 function quickHoursPreviewText(row, deductHours) {
   const rate = Number(row.hourlyDeductionRatePhp || 0);
   const pesoDeduction = Math.max(0, Number(deductHours || 0)) * rate;
@@ -2947,27 +3041,45 @@ function quickHoursNumber(value) {
 function syncQuickHoursInputs(mode = 'deduct') {
   if (!editingQuickHoursRow) return;
   const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
+  const previousDeducted = Math.min(actual, Math.max(0, Number(editingQuickHoursRow.deductedHours || 0)));
   if (mode === 'payable') {
     const typedPayable = quickHoursNumber($('#quickPayableHours').value);
     if (typedPayable === null) {
       $('#quickDeductHours').value = '';
+      if ($('#quickAddDeductHours')) $('#quickAddDeductHours').value = '';
       $('#quickDeductionPreview').textContent = 'Enter payable hours and Sync2Time will calculate the deduction.';
       return;
     }
     const payable = Math.min(actual, typedPayable);
     const deduct = Math.max(0, actual - payable);
+    const additional = Math.max(0, deduct - previousDeducted);
     $('#quickDeductHours').value = compactHoursValue(deduct);
+    if ($('#quickAddDeductHours')) $('#quickAddDeductHours').value = compactHoursValue(additional);
+    $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, deduct);
+  } else if (mode === 'add') {
+    const typedAdditional = quickHoursNumber($('#quickAddDeductHours')?.value);
+    if (typedAdditional === null) {
+      $('#quickDeductionPreview').textContent = 'Enter only the new hours to deduct. Sync2Time will add it to the current deduction.';
+      return;
+    }
+    const deduct = Math.min(actual, previousDeducted + typedAdditional);
+    const payable = Math.max(0, actual - deduct);
+    $('#quickDeductHours').value = compactHoursValue(deduct);
+    $('#quickPayableHours').value = compactHoursValue(payable);
     $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, deduct);
   } else {
     const typedDeduct = quickHoursNumber($('#quickDeductHours').value);
     if (typedDeduct === null) {
       $('#quickPayableHours').value = '';
+      if ($('#quickAddDeductHours')) $('#quickAddDeductHours').value = '';
       $('#quickDeductionPreview').textContent = 'Enter deducted hours and Sync2Time will calculate payable hours.';
       return;
     }
     const deduct = Math.min(actual, typedDeduct);
     const payable = Math.max(0, actual - deduct);
+    const additional = Math.max(0, deduct - previousDeducted);
     $('#quickPayableHours').value = compactHoursValue(payable);
+    if ($('#quickAddDeductHours')) $('#quickAddDeductHours').value = compactHoursValue(additional);
     $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, deduct);
   }
 }
@@ -2978,21 +3090,83 @@ function finalizeQuickHoursInputs(mode = 'deduct') {
   const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
   const deduct = Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
   const payable = Math.max(0, actual - deduct);
+  const previousDeducted = Math.min(actual, Math.max(0, Number(editingQuickHoursRow.deductedHours || 0)));
+  const additional = Math.max(0, deduct - previousDeducted);
   $('#quickDeductHours').value = deduct.toFixed(2);
   $('#quickPayableHours').value = payable.toFixed(2);
+  if ($('#quickAddDeductHours')) $('#quickAddDeductHours').value = additional.toFixed(2);
   $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, deduct);
 }
 
+async function savePayrollAdjustmentEvent(record) {
+  const eventRecord = {
+    payroll_adjustment_id: record.payrollAdjustmentId || null,
+    employee_id: record.employeeId,
+    period_start: record.periodStart,
+    period_end: record.periodEnd,
+    change_type: record.changeType || 'hours',
+    payroll_role: record.payrollRole || '',
+    actual_hours: Number(record.actualHours || 0),
+    previous_payable_hours: Number(record.previousPayableHours || 0),
+    new_payable_hours: Number(record.newPayableHours || 0),
+    deducted_hours_delta: Number(record.deductedHoursDelta || 0),
+    total_deducted_hours: Number(record.totalDeductedHours || 0),
+    deducted_amount_delta: Number(record.deductedAmountDelta || 0),
+    adjustment_php_delta: Number(record.adjustmentPhpDelta || 0),
+    deductions_php_delta: Number(record.deductionsPhpDelta || 0),
+    commission_php_delta: Number(record.commissionPhpDelta || 0),
+    note: record.note || '',
+    created_by: currentProfile?.id || null,
+    created_at: new Date().toISOString()
+  };
+  if (usesSupabase()) {
+    const { data, error } = await supabaseClient
+      .from('payroll_adjustment_events')
+      .insert(eventRecord)
+      .select()
+      .single();
+    if (error) {
+      console.warn('Payroll adjustment history save failed:', error.message);
+      return { ok: false, error };
+    }
+    payrollAdjustmentEvents = [data, ...payrollAdjustmentEvents.filter(item => item.id !== data.id)];
+    persistPayrollAdjustmentEvents();
+    return { ok: true, data };
+  }
+  const localRecord = {
+    ...eventRecord,
+    id: crypto.randomUUID(),
+    employeeId: eventRecord.employee_id,
+    periodStart: eventRecord.period_start,
+    periodEnd: eventRecord.period_end,
+    changeType: eventRecord.change_type,
+    payrollRole: eventRecord.payroll_role,
+    actualHours: eventRecord.actual_hours,
+    previousPayableHours: eventRecord.previous_payable_hours,
+    newPayableHours: eventRecord.new_payable_hours,
+    deductedHoursDelta: eventRecord.deducted_hours_delta,
+    totalDeductedHours: eventRecord.total_deducted_hours,
+    createdAt: eventRecord.created_at
+  };
+  payrollAdjustmentEvents = [localRecord, ...payrollAdjustmentEvents];
+  persistPayrollAdjustmentEvents();
+  return { ok: true, data: localRecord };
+}
+
 function openQuickHoursEditor(employeeId) {
+  enhanceQuickHoursEditor();
   const row = currentPayrollRows.find(item => item.person.id === employeeId);
   if (!row) return showToast('Payroll row not found.');
   const { start, end } = payrollRange();
+  const currentPayable = Math.max(0, Number(row.payableHours ?? row.actualHours));
   editingQuickHoursRow = row;
   $('#quickHoursEmployee').textContent = row.person.name;
   $('#quickHoursPeriod').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${row.person.role}`;
   $('#quickActualHours').value = row.actualHours.toFixed(2);
+  if ($('#quickCurrentPayableHours')) $('#quickCurrentPayableHours').value = currentPayable.toFixed(2);
+  if ($('#quickAddDeductHours')) $('#quickAddDeductHours').value = '0.00';
   $('#quickDeductHours').value = Number(row.deductedHours || 0).toFixed(2);
-  $('#quickPayableHours').value = Math.max(0, Number(row.payableHours ?? row.actualHours)).toFixed(2);
+  $('#quickPayableHours').value = currentPayable.toFixed(2);
   $('#quickHoursNote').value = row.note || '';
   $('#quickDeductionPreview').textContent = quickHoursPreviewText(row, row.deductedHours || 0);
   $('#quickHoursError').hidden = true;
@@ -3006,11 +3180,20 @@ async function saveQuickHoursAdjustment(event) {
   if (!editingQuickHoursRow) return;
   const row = editingQuickHoursRow;
   const { start, end } = payrollRange();
-  finalizeQuickHoursInputs(document.activeElement?.id === 'quickPayableHours' ? 'payable' : 'deduct');
+  const activeQuickMode = document.activeElement?.id === 'quickPayableHours'
+    ? 'payable'
+    : document.activeElement?.id === 'quickAddDeductHours'
+      ? 'add'
+      : 'deduct';
+  finalizeQuickHoursInputs(activeQuickMode);
   const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
+  const previousDeductedHours = Math.min(actual, Math.max(0, Number(row.deductedHours || 0)));
+  const previousPayableHours = Math.max(0, actual - previousDeductedHours);
   const deductedHours = Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
+  const newPayableHours = Math.max(0, actual - deductedHours);
+  const deductedHoursDelta = deductedHours - previousDeductedHours;
   const note = $('#quickHoursNote').value.trim();
-  if (deductedHours > 0 && !note) {
+  if (Math.abs(deductedHoursDelta) > 0.004 && !note) {
     $('#quickHoursError').textContent = 'Add a reason or note before saving a deducted hour adjustment.';
     $('#quickHoursError').hidden = false;
     return;
@@ -3034,6 +3217,7 @@ async function saveQuickHoursAdjustment(event) {
     note,
     updated_at: new Date().toISOString()
   };
+  let savedAdjustmentId = existing.id || null;
   if (usesSupabase()) {
     const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
     if (error) {
@@ -3041,6 +3225,7 @@ async function saveQuickHoursAdjustment(event) {
       $('#quickHoursError').hidden = false;
       return;
     }
+    savedAdjustmentId = data.id;
     payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !(item.employee_id === data.employee_id && item.period_start === data.period_start && item.period_end === data.period_end));
     payrollAdjustments.push(data);
   } else {
@@ -3048,11 +3233,28 @@ async function saveQuickHoursAdjustment(event) {
     payrollAdjustments.push({ ...record, id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, deductedHours });
     persistPayrollAdjustments();
   }
+  let historyResult = { ok: true };
+  if (Math.abs(deductedHoursDelta) > 0.004 || note) {
+    historyResult = await savePayrollAdjustmentEvent({
+      payrollAdjustmentId: savedAdjustmentId,
+      employeeId: row.person.id,
+      periodStart: isoDate(start),
+      periodEnd: isoDate(end),
+      changeType: 'hours',
+      payrollRole: selectedPayrollRole,
+      actualHours: actual,
+      previousPayableHours,
+      newPayableHours,
+      deductedHoursDelta,
+      totalDeductedHours: deductedHours,
+      note
+    });
+  }
   closeQuickHoursEditor();
   renderPayroll();
   renderReports();
   renderEmployeePayrollAdjustments();
-  showToast(`${row.person.name}'s payable hours were updated.`);
+  showToast(historyResult.ok ? `${row.person.name}'s payable hours were updated.` : 'Hours saved, but the employee history table is missing. Run the new SQL file in Supabase.');
 }
 
 async function savePaystubRecipient(employeeId, email) {
@@ -3184,7 +3386,7 @@ async function sendApprovedPaystubs() {
   if (!allReady || !approvedRows.length) return showToast('Approve every employee and assign every recipient first.');
   if (!rows.length) return showToast('All paystubs in this tab were already sent.');
   if (!usesSupabase()) return showToast('Supabase connection is required for secure email delivery.');
-  if (!confirm(`Send ${rows.length} ${selectedPayrollRole} paystubs now? Each PDF will only be sent to that employee's dedicated paystub email.`)) return;
+  if (!confirm(`Send ${rows.length} ${selectedPayrollRole} paystubs now from hr@sync2va.com? Each PDF will only be sent to that employee's dedicated paystub email.`)) return;
   const button = $('#sendPaystubs');
   button.disabled = true;
   const original = button.textContent;
@@ -4417,8 +4619,11 @@ $('#quickHoursCancel').onclick = closeQuickHoursEditor;
 $('#quickHoursBackdrop').onclick = event => {
   if (event.target === event.currentTarget) closeQuickHoursEditor();
 };
+enhanceQuickHoursEditor();
+if ($('#quickAddDeductHours')) $('#quickAddDeductHours').oninput = () => syncQuickHoursInputs('add');
 $('#quickPayableHours').oninput = () => syncQuickHoursInputs('payable');
 $('#quickDeductHours').oninput = () => syncQuickHoursInputs('deduct');
+if ($('#quickAddDeductHours')) $('#quickAddDeductHours').onblur = () => finalizeQuickHoursInputs('add');
 $('#quickPayableHours').onblur = () => finalizeQuickHoursInputs('payable');
 $('#quickDeductHours').onblur = () => finalizeQuickHoursInputs('deduct');
 $('#exportClose').onclick = () => { $('#exportBackdrop').hidden = true; };
