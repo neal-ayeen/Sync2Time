@@ -134,6 +134,7 @@ let selectedPayrollRole = 'coaches';
 let editingPayrollRow = null;
 let editingPayrollAdjustment = null;
 let editingQuickHoursRow = null;
+let quickHoursDrafts = [];
 let deletedNoticeRepairAttempted = false;
 let approvedTimeEditRepairAttempted = false;
 let editingEmployeeId = null;
@@ -2551,6 +2552,68 @@ function renderPayroll() {
   $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · sender: hr@sync2va.com`;
   $('#sendPaystubs').disabled = !ready;
   $('#sendPaystubs').textContent = ready ? 'Send approved paystubs' : 'Approve all first';
+  renderSampleBulkEmailPreview();
+}
+
+function sampleBulkEmailRow() {
+  return currentPayrollRows.find(row => paystubRecipients.some(item => item.employee_id === row.person.id)) || currentPayrollRows[0] || null;
+}
+
+function renderSampleBulkEmailPreview() {
+  const preview = $('#sampleBulkEmailPreview');
+  if (!preview) return;
+  const row = sampleBulkEmailRow();
+  if ($('#sampleBulkEmailRecipient') && !$('#sampleBulkEmailRecipient').value) $('#sampleBulkEmailRecipient').value = 'hr@sync2va.com';
+  const button = $('#sendSampleBulkEmail');
+  if (!row) {
+    preview.textContent = 'No employee rows are available in this payroll tab yet.';
+    if (button) button.disabled = true;
+    return;
+  }
+  const { start, end } = payrollRange();
+  preview.textContent = `Sample will use ${row.person.name}'s ${selectedPayrollRole} paystub for ${businessDateLabel(start)} to ${businessDateLabel(end)}. It sends only to the test email below and does not mark the employee emailed.`;
+  if (button) button.disabled = !usesSupabase();
+}
+
+async function sendSampleBulkEmail() {
+  const button = $('#sendSampleBulkEmail');
+  const input = $('#sampleBulkEmailRecipient');
+  const recipient = (input?.value || '').trim().toLowerCase();
+  if (!recipient || !recipient.includes('@')) return showToast('Add a valid email address for the sample.');
+  if (!usesSupabase()) return showToast('Supabase must be connected before sending a sample email.');
+  const row = sampleBulkEmailRow();
+  if (!row) return showToast('No payroll row is available for a sample email.');
+  const originalText = button?.textContent || 'Send sample email';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Sending sample...';
+  }
+  try {
+    const pdf = await buildEmployeePaystub(row.person.id, false);
+    if (!pdf?.base64) throw new Error('Could not create the sample paystub PDF');
+    const { start, end } = payrollRange();
+    const { data, error } = await supabaseClient.functions.invoke('send-paystubs', {
+      body: {
+        testMode: true,
+        testRecipient: recipient,
+        employeeId: row.person.id,
+        periodStart: isoDate(start),
+        periodEnd: isoDate(end),
+        filename: `TEST-${pdf.filename}`,
+        pdfBase64: pdf.base64
+      }
+    });
+    if (error) throw new Error(error.message);
+    if (data?.error) throw new Error(data.error);
+    showToast(`Sample paystub email sent to ${recipient}.`);
+  } catch (error) {
+    showToast(`Sample email failed: ${error.message || 'unknown error'}`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
 }
 
 function loadPaystubLogo() {
@@ -2997,6 +3060,9 @@ function closePayrollRowEditor() {
 function closeQuickHoursEditor() {
   $('#quickHoursBackdrop').hidden = true;
   editingQuickHoursRow = null;
+  quickHoursDrafts = [];
+  if ($('#quickEditDraftRows')) $('#quickEditDraftRows').innerHTML = '';
+  if ($('#quickSavedEditRows')) $('#quickSavedEditRows').innerHTML = '';
   $('#quickHoursError').hidden = true;
 }
 
@@ -3015,6 +3081,10 @@ function enhanceQuickHoursEditor() {
   }
   if (!$('#quickAddDeductHours') && payableLabel) {
     payableLabel.insertAdjacentHTML('beforebegin', '<label>Deduct this edit<input id="quickAddDeductHours" type="number" min="0" step="0.01" placeholder="0.50"></label>');
+  }
+  const preview = $('#quickDeductionPreview');
+  if (preview && !$('#quickAddEdit')) {
+    preview.insertAdjacentHTML('afterend', '<div class="quick-edit-tools"><button class="secondary quick-add-edit" id="quickAddEdit" type="button" title="Add this correction as a separate saved edit"><span aria-hidden="true">+</span> Add time edit</button><small>Add every correction separately, then click Save once.</small></div><div class="quick-edit-list" id="quickEditDraftRows" aria-live="polite"></div><div class="quick-edit-history" id="quickSavedEditRows"></div>');
   }
 }
 
@@ -3038,10 +3108,104 @@ function quickHoursNumber(value) {
   return Number.isFinite(number) ? Math.max(0, number) : null;
 }
 
+function quickDraftHoursTotal() {
+  return quickHoursDrafts.reduce((sum, draft) => sum + Number(draft.hours || 0), 0);
+}
+
+function quickBaseDeductedHours(row = editingQuickHoursRow, actualOverride = null) {
+  if (!row) return 0;
+  const actual = actualOverride === null ? Math.max(0, Number($('#quickActualHours')?.value) || 0) : Math.max(0, Number(actualOverride) || 0);
+  return Math.min(actual, Math.max(0, Number(row.deductedHours || 0) + quickDraftHoursTotal()));
+}
+
+function quickSavedHistoryForCurrent() {
+  if (!editingQuickHoursRow) return [];
+  const { start, end } = payrollRange();
+  const startKey = isoDate(start);
+  const endKey = isoDate(end);
+  return payrollAdjustmentHistoryFor(editingQuickHoursRow.person.id)
+    .filter(item => (item.period_start || item.periodStart) === startKey && (item.period_end || item.periodEnd) === endKey);
+}
+
+function renderQuickHoursDrafts() {
+  const draftRows = $('#quickEditDraftRows');
+  const historyRows = $('#quickSavedEditRows');
+  if (!draftRows || !historyRows || !editingQuickHoursRow) return;
+  draftRows.innerHTML = quickHoursDrafts.length
+    ? quickHoursDrafts.map((draft, index) => `<div class="quick-edit-row"><div><b>Edit ${index + 1}: -${Number(draft.hours || 0).toFixed(2)}h</b><small>${escapeHtml(draft.note || 'No note provided')}</small></div><button type="button" class="secondary" data-remove-quick-edit="${escapeHtml(draft.id)}">Remove</button></div>`).join('')
+    : '<div class="quick-edit-empty">No new time edits added yet. Enter hours and a note, then click + Add time edit.</div>';
+
+  const history = quickSavedHistoryForCurrent();
+  historyRows.innerHTML = history.length
+    ? `<p class="quick-edit-caption">Saved edits for this cutoff</p>${history.map(item => {
+      const delta = Number(item.deducted_hours_delta ?? item.deductedHoursDelta ?? 0);
+      const previousPayable = Number(item.previous_payable_hours ?? item.previousPayableHours ?? 0);
+      const newPayable = Number(item.new_payable_hours ?? item.newPayableHours ?? 0);
+      const createdAt = item.created_at || item.createdAt;
+      return `<div class="quick-edit-row saved"><div><b>${delta >= 0 ? '-' : '+'}${Math.abs(delta).toFixed(2)}h · payable ${previousPayable.toFixed(2)}h → ${newPayable.toFixed(2)}h</b><small>${escapeHtml(item.note || 'No note provided')}</small><small>${createdAt ? businessDateTimeLabel(createdAt) : 'Saved edit'}</small></div></div>`;
+    }).join('')}`
+    : '<div class="quick-edit-empty saved">No saved time edits yet for this cutoff.</div>';
+}
+
+function refreshQuickHoursDraftTotals() {
+  if (!editingQuickHoursRow) return;
+  const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
+  const totalDeducted = quickBaseDeductedHours(editingQuickHoursRow, actual);
+  const payable = Math.max(0, actual - totalDeducted);
+  $('#quickDeductHours').value = totalDeducted.toFixed(2);
+  $('#quickPayableHours').value = payable.toFixed(2);
+  if ($('#quickAddDeductHours')) $('#quickAddDeductHours').value = '0.00';
+  $('#quickDeductionPreview').textContent = quickHoursPreviewText(editingQuickHoursRow, totalDeducted);
+}
+
+function addQuickHoursDraft() {
+  if (!editingQuickHoursRow) return false;
+  const activeQuickMode = document.activeElement?.id === 'quickPayableHours'
+    ? 'payable'
+    : document.activeElement?.id === 'quickDeductHours'
+      ? 'deduct'
+      : 'add';
+  finalizeQuickHoursInputs(activeQuickMode);
+  const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
+  const baseBeforeThisEdit = quickBaseDeductedHours(editingQuickHoursRow, actual);
+  const typedAdditional = quickHoursNumber($('#quickAddDeductHours')?.value);
+  const additional = Math.min(Math.max(0, typedAdditional ?? 0), Math.max(0, actual - baseBeforeThisEdit));
+  const note = $('#quickHoursNote').value.trim();
+  if (additional <= 0.004) {
+    $('#quickHoursError').textContent = 'Enter the hours for this edit before clicking + Add time edit.';
+    $('#quickHoursError').hidden = false;
+    return false;
+  }
+  if (!note) {
+    $('#quickHoursError').textContent = 'Add a reason or note for this specific time edit.';
+    $('#quickHoursError').hidden = false;
+    return false;
+  }
+  quickHoursDrafts.push({
+    id: crypto.randomUUID(),
+    hours: additional,
+    note,
+    createdAt: new Date().toISOString()
+  });
+  $('#quickHoursNote').value = '';
+  $('#quickHoursError').hidden = true;
+  refreshQuickHoursDraftTotals();
+  renderQuickHoursDrafts();
+  $('#quickAddDeductHours')?.focus();
+  $('#quickAddDeductHours')?.select();
+  return true;
+}
+
+function removeQuickHoursDraft(id) {
+  quickHoursDrafts = quickHoursDrafts.filter(draft => draft.id !== id);
+  refreshQuickHoursDraftTotals();
+  renderQuickHoursDrafts();
+}
+
 function syncQuickHoursInputs(mode = 'deduct') {
   if (!editingQuickHoursRow) return;
   const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
-  const previousDeducted = Math.min(actual, Math.max(0, Number(editingQuickHoursRow.deductedHours || 0)));
+  const previousDeducted = quickBaseDeductedHours(editingQuickHoursRow, actual);
   if (mode === 'payable') {
     const typedPayable = quickHoursNumber($('#quickPayableHours').value);
     if (typedPayable === null) {
@@ -3090,7 +3254,7 @@ function finalizeQuickHoursInputs(mode = 'deduct') {
   const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
   const deduct = Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
   const payable = Math.max(0, actual - deduct);
-  const previousDeducted = Math.min(actual, Math.max(0, Number(editingQuickHoursRow.deductedHours || 0)));
+  const previousDeducted = quickBaseDeductedHours(editingQuickHoursRow, actual);
   const additional = Math.max(0, deduct - previousDeducted);
   $('#quickDeductHours').value = deduct.toFixed(2);
   $('#quickPayableHours').value = payable.toFixed(2);
@@ -3160,6 +3324,7 @@ function openQuickHoursEditor(employeeId) {
   const { start, end } = payrollRange();
   const currentPayable = Math.max(0, Number(row.payableHours ?? row.actualHours));
   editingQuickHoursRow = row;
+  quickHoursDrafts = [];
   $('#quickHoursEmployee').textContent = row.person.name;
   $('#quickHoursPeriod').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${row.person.role}`;
   $('#quickActualHours').value = row.actualHours.toFixed(2);
@@ -3167,12 +3332,13 @@ function openQuickHoursEditor(employeeId) {
   if ($('#quickAddDeductHours')) $('#quickAddDeductHours').value = '0.00';
   $('#quickDeductHours').value = Number(row.deductedHours || 0).toFixed(2);
   $('#quickPayableHours').value = currentPayable.toFixed(2);
-  $('#quickHoursNote').value = row.note || '';
+  $('#quickHoursNote').value = '';
   $('#quickDeductionPreview').textContent = quickHoursPreviewText(row, row.deductedHours || 0);
   $('#quickHoursError').hidden = true;
+  renderQuickHoursDrafts();
   $('#quickHoursBackdrop').hidden = false;
-  $('#quickPayableHours').focus();
-  $('#quickPayableHours').select();
+  ($('#quickAddDeductHours') || $('#quickPayableHours')).focus();
+  ($('#quickAddDeductHours') || $('#quickPayableHours')).select();
 }
 
 async function saveQuickHoursAdjustment(event) {
@@ -3180,19 +3346,34 @@ async function saveQuickHoursAdjustment(event) {
   if (!editingQuickHoursRow) return;
   const row = editingQuickHoursRow;
   const { start, end } = payrollRange();
+  const pendingAdditional = quickHoursNumber($('#quickAddDeductHours')?.value) || 0;
+  const pendingNote = $('#quickHoursNote').value.trim();
+  if (quickHoursDrafts.length && pendingAdditional > 0.004) {
+    if (!pendingNote) {
+      $('#quickHoursError').textContent = 'Add a note for the current edit, then click Save again.';
+      $('#quickHoursError').hidden = false;
+      return;
+    }
+    if (!addQuickHoursDraft()) return;
+  }
   const activeQuickMode = document.activeElement?.id === 'quickPayableHours'
     ? 'payable'
     : document.activeElement?.id === 'quickAddDeductHours'
       ? 'add'
       : 'deduct';
-  finalizeQuickHoursInputs(activeQuickMode);
+  if (!quickHoursDrafts.length) finalizeQuickHoursInputs(activeQuickMode);
   const actual = Math.max(0, Number($('#quickActualHours').value) || 0);
   const previousDeductedHours = Math.min(actual, Math.max(0, Number(row.deductedHours || 0)));
   const previousPayableHours = Math.max(0, actual - previousDeductedHours);
-  const deductedHours = Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
+  const draftTotal = Math.min(Math.max(0, actual - previousDeductedHours), quickDraftHoursTotal());
+  const deductedHours = quickHoursDrafts.length
+    ? Math.min(actual, previousDeductedHours + draftTotal)
+    : Math.min(actual, Math.max(0, Number($('#quickDeductHours').value) || 0));
   const newPayableHours = Math.max(0, actual - deductedHours);
   const deductedHoursDelta = deductedHours - previousDeductedHours;
-  const note = $('#quickHoursNote').value.trim();
+  const note = quickHoursDrafts.length
+    ? quickHoursDrafts.map((draft, index) => `Edit ${index + 1}: -${Number(draft.hours || 0).toFixed(2)}h - ${draft.note}`).join(' | ')
+    : $('#quickHoursNote').value.trim();
   if (Math.abs(deductedHoursDelta) > 0.004 && !note) {
     $('#quickHoursError').textContent = 'Add a reason or note before saving a deducted hour adjustment.';
     $('#quickHoursError').hidden = false;
@@ -3234,7 +3415,30 @@ async function saveQuickHoursAdjustment(event) {
     persistPayrollAdjustments();
   }
   let historyResult = { ok: true };
-  if (Math.abs(deductedHoursDelta) > 0.004 || note) {
+  if (quickHoursDrafts.length) {
+    let runningDeducted = previousDeductedHours;
+    for (const draft of quickHoursDrafts) {
+      const draftHours = Math.min(Number(draft.hours || 0), Math.max(0, actual - runningDeducted));
+      if (draftHours <= 0.004) continue;
+      const draftPreviousPayable = Math.max(0, actual - runningDeducted);
+      runningDeducted = Math.min(actual, runningDeducted + draftHours);
+      const result = await savePayrollAdjustmentEvent({
+        payrollAdjustmentId: savedAdjustmentId,
+        employeeId: row.person.id,
+        periodStart: isoDate(start),
+        periodEnd: isoDate(end),
+        changeType: 'hours',
+        payrollRole: selectedPayrollRole,
+        actualHours: actual,
+        previousPayableHours: draftPreviousPayable,
+        newPayableHours: Math.max(0, actual - runningDeducted),
+        deductedHoursDelta: draftHours,
+        totalDeductedHours: runningDeducted,
+        note: draft.note
+      });
+      if (!result.ok) historyResult = result;
+    }
+  } else if (Math.abs(deductedHoursDelta) > 0.004 || note) {
     historyResult = await savePayrollAdjustmentEvent({
       payrollAdjustmentId: savedAdjustmentId,
       employeeId: row.person.id,
@@ -3250,6 +3454,7 @@ async function saveQuickHoursAdjustment(event) {
       note
     });
   }
+  quickHoursDrafts = [];
   closeQuickHoursEditor();
   renderPayroll();
   renderReports();
@@ -4369,6 +4574,7 @@ $('#aiAlertRefresh').onclick = async () => {
   showToast('AI alerts refreshed.');
 };
 $('#sendPaystubs').onclick = sendApprovedPaystubs;
+if ($('#sendSampleBulkEmail')) $('#sendSampleBulkEmail').onclick = sendSampleBulkEmail;
 $('#managePaystubTemplates').onclick = () => openPaystubEmailEditor();
 $('#paystubEmailForm').onsubmit = openManualPaystubGmail;
 $('#paystubEmailClose').onclick = closePaystubEmailEditor;
@@ -4620,6 +4826,7 @@ $('#quickHoursBackdrop').onclick = event => {
   if (event.target === event.currentTarget) closeQuickHoursEditor();
 };
 enhanceQuickHoursEditor();
+if ($('#quickAddEdit')) $('#quickAddEdit').onclick = addQuickHoursDraft;
 if ($('#quickAddDeductHours')) $('#quickAddDeductHours').oninput = () => syncQuickHoursInputs('add');
 $('#quickPayableHours').oninput = () => syncQuickHoursInputs('payable');
 $('#quickDeductHours').oninput = () => syncQuickHoursInputs('deduct');
@@ -4644,6 +4851,12 @@ $('#copyExportCsv').onclick = async () => {
 };
 
 document.body.addEventListener('click', async event => {
+  const removeQuickEdit = event.target.closest('[data-remove-quick-edit]');
+  if (removeQuickEdit) {
+    event.stopPropagation();
+    removeQuickHoursDraft(removeQuickEdit.dataset.removeQuickEdit);
+    return;
+  }
   const offboardEmployee = event.target.closest('[data-offboard-employee]');
   if (offboardEmployee) {
     event.stopPropagation();
