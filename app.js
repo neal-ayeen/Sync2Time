@@ -106,6 +106,15 @@ let sharedSettings = {};
 let deletedTimeAlerts = JSON.parse(localStorage.getItem('sync2time-deleted-time-alerts') || '[]');
 let payrollAdjustments = JSON.parse(localStorage.getItem('sync2time-payroll-adjustments') || '[]');
 let paystubRecipients = JSON.parse(localStorage.getItem('sync2time-paystub-recipients') || '[]');
+const DEFAULT_ROLE_HOUR_RULES = [
+  { role_name: 'Admin', daily_hour_limit: 8, weekly_hour_limit: 40, allowed_days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], is_flexible: false, requires_ot_approval: true },
+  { role_name: 'Coach', daily_hour_limit: 3, weekly_hour_limit: 15, allowed_days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], is_flexible: false, requires_ot_approval: true },
+  { role_name: 'Webinar Specialist', daily_hour_limit: 2, weekly_hour_limit: 4, allowed_days: ['Thursday', 'Friday'], is_flexible: false, requires_ot_approval: true },
+  { role_name: 'SMM', daily_hour_limit: null, weekly_hour_limit: 40, allowed_days: null, is_flexible: true, requires_ot_approval: true },
+  { role_name: 'Other', daily_hour_limit: 8, weekly_hour_limit: 40, allowed_days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], is_flexible: true, requires_ot_approval: true }
+];
+let roleHourRules = JSON.parse(localStorage.getItem('sync2time-role-hour-rules') || 'null') || [...DEFAULT_ROLE_HOUR_RULES];
+let overtimeAlerts = JSON.parse(localStorage.getItem('sync2time-overtime-alerts') || '[]');
 const DEFAULT_PAYSTUB_EMAIL_TEMPLATES = [
   {
     id: 'standard-paystub',
@@ -535,6 +544,7 @@ async function completeSupabaseTimeEntry(end) {
     .eq('id', state.running.timeEntryId)
     .eq('employee_id', currentProfile.id);
   if (error) showToast(`Clock-out error: ${error.message}`);
+  else requestAiOvertimeReview(state.running.timeEntryId).then(() => loadOvertimeAlerts().then(renderAiAlerts));
 }
 
 async function updateSupabaseRunningTask(task) {
@@ -739,6 +749,35 @@ async function loadPayrollAdjustments() {
   if (!error) payrollAdjustments = data || [];
 }
 
+async function loadRoleHourRules() {
+  if (!usesSupabase()) return;
+  const { data, error } = await supabaseClient
+    .from('role_hour_rules')
+    .select('*')
+    .order('role_name', { ascending: true });
+  if (error) {
+    console.warn('Role hour rules unavailable:', error.message);
+    roleHourRules = [...DEFAULT_ROLE_HOUR_RULES];
+    return;
+  }
+  roleHourRules = data?.length ? data : [...DEFAULT_ROLE_HOUR_RULES];
+  localStorage.setItem('sync2time-role-hour-rules', JSON.stringify(roleHourRules));
+}
+
+async function loadOvertimeAlerts() {
+  if (!usesSupabase() || currentProfile?.role !== 'admin') return;
+  const { data, error } = await supabaseClient
+    .from('overtime_alerts')
+    .select('*, profiles:employee_id(email, full_name, job_role)')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.warn('Overtime alerts unavailable:', error.message);
+    return;
+  }
+  overtimeAlerts = data || [];
+  localStorage.setItem('sync2time-overtime-alerts', JSON.stringify(overtimeAlerts));
+}
+
 async function loadSupabaseProjects() {
   if (!usesSupabase()) return;
   const { data, error } = await supabaseClient
@@ -869,7 +908,7 @@ async function applyApprovedTimeEdit(request, silent = false) {
       clock_in: start.toISOString(),
       clock_out: end.toISOString(),
       status: 'completed'
-    }).eq('id', existing.id);
+    }).eq('id', existing.id).select('id').single();
   } else {
     result = await supabaseClient.from('time_entries').insert({
       employee_id: request.employeeId,
@@ -877,10 +916,11 @@ async function applyApprovedTimeEdit(request, silent = false) {
       clock_in: start.toISOString(),
       clock_out: end.toISOString(),
       status: 'completed'
-    });
+    }).select('id').single();
   }
   if (result.error) return { ok: false, message: result.error.message };
   await loadSupabaseTimeEntries();
+  if (result.data?.id) await requestAiOvertimeReview(result.data.id);
   if (!silent) showToast('Approved time was applied to the employee log.');
   return { ok: true };
 }
@@ -982,6 +1022,8 @@ async function refreshSupabaseData() {
   await loadSupabaseLivePresence();
   await loadSupabaseTimeEntries();
   await loadPayrollAdjustments();
+  await loadRoleHourRules();
+  await loadOvertimeAlerts();
   await loadPaystubRecipients();
   await loadSupabaseRequests();
   await repairApprovedTimeEdits();
@@ -999,6 +1041,7 @@ async function refreshSupabaseData() {
   renderDeletedTimeAlerts();
   renderReports();
   renderPayroll();
+  renderAiAlerts();
   renderEmployeeHoursReport();
 }
 
@@ -1041,6 +1084,8 @@ function subscribeSupabaseRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entries' }, async () => {
       await loadSupabaseTimeEntries();
       await loadSupabaseLivePresence();
+      await detectOvertimeForCompletedEntries();
+      await loadOvertimeAlerts();
       reconcileAdminClockOut();
       hydrateEmployeeStateFromSupabase();
       renderLiveTeam();
@@ -1048,12 +1093,22 @@ function subscribeSupabaseRealtime() {
       renderScheduleWatch();
       renderTeamDirectory();
       renderReports();
+      renderAiAlerts();
       render();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'payroll_adjustments' }, async () => {
       await loadPayrollAdjustments();
       renderReports();
       renderEmployeePayrollAdjustments();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'role_hour_rules' }, async () => {
+      await loadRoleHourRules();
+      renderAiAlerts();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'overtime_alerts' }, async () => {
+      await loadOvertimeAlerts();
+      renderAiAlerts();
+      renderPayroll();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'leave_requests' }, async () => {
       await loadSupabaseRequests();
@@ -1488,6 +1543,7 @@ function render() {
   renderScheduleWatch();
   renderReports();
   renderPayroll();
+  renderAiAlerts();
   renderEmployeeRequests();
   renderDeletedTimeAlerts();
   renderEmployeePayrollAdjustments();
@@ -1573,6 +1629,77 @@ function rateLabel(person) {
   if (person.rate === 'Commission Based') return 'Commission';
   if (typeof person.rate !== 'number') return 'Pending';
   return person.rate >= 1000 ? `₱${person.rate.toLocaleString()}/mo → ${money(hourlyRate(person))}/hr` : `$${person.rate.toFixed(2)}/hr`;
+}
+
+function overtimeRoleName(role = '') {
+  const text = String(role || '').toLowerCase();
+  if (text.includes('webinar')) return 'Webinar Specialist';
+  if (text.includes('smm')) return 'SMM';
+  if (text.includes('coach')) return 'Coach';
+  if (text.includes('admin')) return 'Admin';
+  return 'Other';
+}
+
+function roleHourRuleFor(role = '') {
+  const family = overtimeRoleName(role);
+  return roleHourRules.find(rule => rule.role_name === family) || DEFAULT_ROLE_HOUR_RULES.find(rule => rule.role_name === family) || DEFAULT_ROLE_HOUR_RULES.at(-1);
+}
+
+function alertEmployeeName(alert) {
+  return alert.profiles?.full_name || rosterSource().find(person => person.id === alert.employee_id)?.name || 'Employee';
+}
+
+function approvedAiAlertOtHours(person, start, end) {
+  return overtimeAlerts.filter(alert => {
+    const date = businessDateFromKey(alert.alert_date);
+    return alert.employee_id === person.id &&
+      alert.status === 'approved' &&
+      alert.admin_decision === 'approve_ot' &&
+      !alert.has_approved_ot &&
+      date >= start &&
+      date <= end;
+  }).reduce((sum, alert) => sum + Number(alert.excess_hours || 0), 0);
+}
+
+function pendingAiAlertHours(person, start, end) {
+  return overtimeAlerts.filter(alert => {
+    const date = businessDateFromKey(alert.alert_date);
+    return alert.employee_id === person.id &&
+      ['new', 'pending_employee_explanation', 'payroll_pending'].includes(alert.status) &&
+      date >= start &&
+      date <= end;
+  }).reduce((sum, alert) => sum + Number(alert.excess_hours || 0), 0);
+}
+
+function rejectedAiAlertHours(person, start, end) {
+  return overtimeAlerts.filter(alert => {
+    const date = businessDateFromKey(alert.alert_date);
+    return alert.employee_id === person.id &&
+      alert.status === 'rejected' &&
+      date >= start &&
+      date <= end;
+  }).reduce((sum, alert) => sum + Number(alert.excess_hours || 0), 0);
+}
+
+async function requestAiOvertimeReview(timeEntryId) {
+  if (!usesSupabase() || !timeEntryId) return null;
+  try {
+    const { data, error } = await supabaseClient.functions.invoke('ai-overtime-review', { body: { timeEntryId } });
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.warn('AI overtime review unavailable:', error.message || error);
+    return null;
+  }
+}
+
+async function detectOvertimeForCompletedEntries() {
+  if (!usesSupabase()) return;
+  const known = new Set(overtimeAlerts.map(alert => alert.time_log_id).filter(Boolean));
+  const completed = supabaseTimeEntries
+    .filter(entry => entry.id && entry.clock_in && entry.clock_out && entry.status !== 'working' && entry.status !== 'deleted' && !known.has(entry.id))
+    .slice(0, 12);
+  for (const entry of completed) await requestAiOvertimeReview(entry.id);
 }
 
 function money(value) {
@@ -1743,6 +1870,85 @@ function renderApprovals() {
   $('#leaveApprovalRows').innerHTML = leaveRequests.map(request => approvalRow(request, 'leave')).join('') || '<div class="empty-state">No leave requests yet.</div>';
   $('#timeEditApprovalRows').innerHTML = timeEditRequests.map(request => approvalRow(request, 'time')).join('') || '<div class="empty-state">No time edit requests yet.</div>';
   $('#overtimeApprovalRows').innerHTML = overtimeRequests.map(request => approvalRow(request, 'overtime')).join('') || '<div class="empty-state">No overtime requests yet.</div>';
+}
+
+function renderAiAlerts() {
+  if (!$('#aiAlertRows')) return;
+  const status = $('#aiAlertStatus')?.value || 'new';
+  const severity = $('#aiAlertSeverity')?.value || 'all';
+  const term = ($('#aiAlertEmployee')?.value || '').toLowerCase();
+  const start = $('#aiAlertStart')?.value || '';
+  const end = $('#aiAlertEnd')?.value || '';
+  const alerts = overtimeAlerts.filter(alert => {
+    const name = alertEmployeeName(alert).toLowerCase();
+    return (status === 'all' || alert.status === status) &&
+      (severity === 'all' || alert.severity === severity) &&
+      (!term || name.includes(term) || String(alert.role_name || '').toLowerCase().includes(term)) &&
+      (!start || alert.alert_date >= start) &&
+      (!end || alert.alert_date <= end);
+  });
+  $('#aiRoleRules').innerHTML = roleHourRules.map(rule => {
+    const days = Array.isArray(rule.allowed_days) && rule.allowed_days.length ? rule.allowed_days.join(', ') : 'Flexible days';
+    const daily = rule.daily_hour_limit === null || rule.daily_hour_limit === undefined ? 'Flexible' : `${Number(rule.daily_hour_limit).toFixed(2)}h/day`;
+    const weekly = rule.weekly_hour_limit === null || rule.weekly_hour_limit === undefined ? '' : ` · ${Number(rule.weekly_hour_limit).toFixed(2)}h/week`;
+    return `<article><span>${escapeHtml(rule.role_name)}</span><b>${daily}${weekly}</b><small>${escapeHtml(days)}</small></article>`;
+  }).join('');
+  $('#aiAlertNewCount').textContent = overtimeAlerts.filter(alert => alert.status === 'new').length;
+  $('#aiAlertHighCount').textContent = overtimeAlerts.filter(alert => alert.severity === 'high').length;
+  $('#aiAlertPayrollCount').textContent = overtimeAlerts.filter(alert => alert.status === 'payroll_pending').length;
+  $('#aiAlertPendingHours').textContent = formatDuration(overtimeAlerts.filter(alert => ['new', 'pending_employee_explanation', 'payroll_pending'].includes(alert.status)).reduce((sum, alert) => sum + Number(alert.excess_hours || 0) * 3600, 0));
+  $('#aiAlertRows').innerHTML = alerts.map(alert => {
+    const name = alertEmployeeName(alert);
+    const hours = `<b>${Number(alert.actual_hours || 0).toFixed(2)}h</b><small>Allowed ${Number(alert.allowed_hours || 0).toFixed(2)}h · Excess ${Number(alert.excess_hours || 0).toFixed(2)}h</small><small>${alert.has_approved_ot ? 'Approved OT context found' : 'No approved OT found'}</small>`;
+    const ai = `<b>${escapeHtml(alert.ai_summary || 'AI recommendation unavailable. Please review manually.')}</b><small>${escapeHtml(alert.ai_suggested_action || 'Review manually.')}</small><small>Payroll: ${escapeHtml(alert.ai_payroll_recommendation || 'Keep pending until admin decision.')}</small>`;
+    const actions = `<div class="ai-alert-actions"><button class="approve-btn" data-ai-alert-action="approve_ot" data-ai-alert-id="${alert.id}">Approve OT</button><button class="reject-btn" data-ai-alert-action="reject_excess" data-ai-alert-id="${alert.id}">Reject excess</button><button class="secondary" data-ai-alert-action="ask_explanation" data-ai-alert-id="${alert.id}">Ask employee</button><button class="secondary" data-ai-alert-action="reviewed" data-ai-alert-id="${alert.id}">Reviewed</button><button class="secondary" data-ai-alert-action="note" data-ai-alert-id="${alert.id}">Note</button></div>`;
+    return `<div class="ai-alert-row"><div class="person"><span class="person-avatar" style="background:#bad7ed">${initials(name)}</span><span>${escapeHtml(name)}<small>${escapeHtml(alert.role_name || alert.profiles?.job_role || '')}</small></span></div><span>${escapeHtml(alert.alert_date)}</span><span class="ai-alert-hours">${hours}</span><span class="severity-pill ${escapeHtml(alert.severity)}">${escapeHtml(alert.severity)}</span><span class="ai-alert-copy">${ai}</span><span class="access-state ${alert.status === 'new' ? 'pending' : ''}">${escapeHtml(alert.status)}</span>${actions}</div>`;
+  }).join('') || '<div class="empty-state">No AI overtime alerts match these filters.</div>';
+  $('#aiAlertCount').textContent = `${alerts.length} alert${alerts.length === 1 ? '' : 's'}`;
+}
+
+async function updateAiAlertAction(id, action) {
+  const alert = overtimeAlerts.find(item => item.id === id);
+  if (!alert) return showToast('AI alert not found.');
+  let status = alert.status;
+  let decision = alert.admin_decision || '';
+  let note = alert.admin_note || '';
+  if (action === 'approve_ot') {
+    status = 'approved';
+    decision = 'approve_ot';
+  } else if (action === 'reject_excess') {
+    status = 'rejected';
+    decision = 'reject_excess';
+  } else if (action === 'ask_explanation') {
+    status = 'pending_employee_explanation';
+    decision = 'ask_employee_explanation';
+  } else if (action === 'reviewed') {
+    status = 'reviewed';
+    decision = decision || 'reviewed';
+  } else if (action === 'note') {
+    const response = prompt('Add or update the admin note for this alert:', note);
+    if (response === null) return;
+    note = response.trim();
+    decision = decision || 'admin_note';
+  }
+  const patch = {
+    status,
+    admin_decision: decision,
+    admin_note: note,
+    reviewed_at: new Date().toISOString(),
+    reviewed_by: currentProfile?.id || null
+  };
+  if (usesSupabase()) {
+    const { error } = await supabaseClient.from('overtime_alerts').update(patch).eq('id', id);
+    if (error) return showToast(`AI alert update error: ${error.message}`);
+    await loadOvertimeAlerts();
+  } else {
+    overtimeAlerts = overtimeAlerts.map(item => item.id === id ? { ...item, ...patch } : item);
+    localStorage.setItem('sync2time-overtime-alerts', JSON.stringify(overtimeAlerts));
+  }
+  renderAiAlerts();
+  renderPayroll();
+  showToast('AI alert decision saved.');
 }
 
 function approvalRequestDetails(request, type) {
@@ -2179,10 +2385,16 @@ function buildPayrollRows() {
       return date >= start && date <= end;
     });
     const actualHours = entries.reduce((sum, entry) => sum + secondsBetween(entry.clock_in, entry.clock_out || Date.now()) / 3600, 0);
-    const otHours = overtimeRequests.filter(request => {
+    const requestedOtHours = overtimeRequests.filter(request => {
       const date = businessDateFromKey(request.date);
       return request.employeeId === person.id && request.status === 'approved' && date >= start && date <= end;
     }).reduce((sum, request) => sum + Number(request.hours || 0), 0);
+    const aiApprovedOtHours = approvedAiAlertOtHours(person, start, end);
+    const otHours = requestedOtHours + aiApprovedOtHours;
+    const pendingOtHours = pendingAiAlertHours(person, start, end);
+    const rejectedOtHours = rejectedAiAlertHours(person, start, end);
+    const excludedAiHours = pendingOtHours + rejectedOtHours;
+    const payrollBaseHours = Math.max(0, actualHours - excludedAiHours);
     const expectedHours = scheduledHoursInRange(person, start, end);
     const values = payrollAdjustmentValues(person, start, end);
     const hourlyUsd = typeof person.rate === 'number' && person.rate < 1000 ? person.rate : 0;
@@ -2197,34 +2409,42 @@ function buildPayrollRows() {
     const hourDeductionPhp = values.deductedHours * hourlyDeductionRatePhp;
     const amountDeductionPhp = selectedPayrollRole === 'coaches' || (!monthlyPhp && hourlyUsd) ? values.deductedAmount * fx : values.deductedAmount;
     const quickDeductionPhp = hourDeductionPhp + amountDeductionPhp;
-    const payableHours = Math.max(0, actualHours - values.deductedHours);
+    const payableHours = Math.max(0, payrollBaseHours - values.deductedHours);
     let grossUsd = 0;
     let grossPhp = 0;
     if (selectedPayrollRole === 'coaches') {
-      grossUsd = (actualHours + otHours) * hourlyUsd;
+      grossUsd = payrollBaseHours * hourlyUsd;
       grossPhp = grossUsd * fx;
     } else if (selectedPayrollRole === 'admin') {
       grossPhp = cutoffPay + otPay;
     } else if (selectedPayrollRole === 'smm') {
       grossPhp = values.grossPayOverride === null ? cutoffPay : Number(values.grossPayOverride);
     } else if (selectedPayrollRole === 'other') {
-      grossPhp = monthlyPhp ? cutoffPay : (actualHours + otHours) * hourlyUsd * fx;
+      grossPhp = monthlyPhp ? cutoffPay : payrollBaseHours * hourlyUsd * fx;
     }
     const calculatedNetPay = selectedPayrollRole === 'coaches'
       ? grossPhp + values.adjustment - quickDeductionPhp
       : grossPhp + values.deductions + values.commission - quickDeductionPhp;
     const netPay = Math.max(0, calculatedNetPay);
-    return { person, expectedHours, actualHours, otHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, ...values };
+    return { person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, ...values };
   });
 }
 
 function payrollHourChip(row) {
   const deducted = Number(row.deductedHours || 0);
   const payable = Number(row.payableHours ?? row.actualHours);
+  const alertBits = [];
+  if (Number(row.pendingOtHours || 0) > 0) alertBits.push(`Pending OT ${row.pendingOtHours.toFixed(2)}h`);
+  if (Number(row.rejectedOtHours || 0) > 0) alertBits.push(`Rejected ${row.rejectedOtHours.toFixed(2)}h`);
   const note = deducted > 0
     ? `Deducted ${deducted.toFixed(2)}h · payable ${payable.toFixed(2)}h`
-    : 'Click to quickly deduct hours';
-  return `<button type="button" class="payroll-hour-chip" data-quick-hours="${escapeHtml(row.person.id)}" title="${escapeHtml(note)}"><b>${row.actualHours.toFixed(2)}</b>${deducted > 0 ? `<small>Payable ${payable.toFixed(2)}</small>` : '<small>Click to edit</small>'}</button>`;
+    : Number(row.excludedAiHours || 0) > 0
+      ? `Payable ${payable.toFixed(2)}h after pending/rejected excess`
+      : 'Click to quickly deduct hours';
+  const sublabel = deducted > 0 || Number(row.excludedAiHours || 0) > 0
+    ? `<small>Payable ${payable.toFixed(2)}</small>`
+    : '<small>Click to edit</small>';
+  return `<button type="button" class="payroll-hour-chip" data-quick-hours="${escapeHtml(row.person.id)}" title="${escapeHtml(note)}"><b>${row.actualHours.toFixed(2)}</b>${sublabel}${alertBits.length ? `<small>${escapeHtml(alertBits.join(' · '))}</small>` : ''}</button>`;
 }
 
 function payrollAdjustmentStack(row, baseAmount, label = 'Manual') {
@@ -2269,6 +2489,8 @@ function renderPayroll() {
   $('#payrollEmployeeCount').textContent = currentPayrollRows.length;
   $('#payrollActualHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.actualHours * 3600, 0));
   $('#payrollOtHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.otHours * 3600, 0));
+  $('#payrollPendingOtHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.pendingOtHours * 3600, 0));
+  $('#payrollRejectedOtHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.rejectedOtHours * 3600, 0));
   $('#payrollNetPay').textContent = phpMoney(currentPayrollRows.reduce((sum, row) => sum + row.netPay, 0));
   $('#payrollRangeLabel').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${selectedPayrollRole.toUpperCase()}`;
   $('#payrollFooterHint').textContent = 'Click Actual Hrs or Hours to deduct time quickly. Click Edit for money adjustments, commissions, and paystub email.';
@@ -2335,6 +2557,8 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Payable hours', row.payableHours.toFixed(2)]);
     lines.push(['Deducted hours', row.deductedHours.toFixed(2)]);
     lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
+    lines.push(['Pending OT hours', row.pendingOtHours.toFixed(2)]);
+    lines.push(['Rejected excess hours', row.rejectedOtHours.toFixed(2)]);
     lines.push(['USD hourly rate', `USD ${row.hourlyUsd.toFixed(2)}`]);
     lines.push(['USD to PHP rate', payrollUsdPhpRate().toFixed(4)]);
     lines.push(['Gross USD pay', `USD ${row.grossUsd.toFixed(2)}`]);
@@ -2347,6 +2571,8 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Payable hours', row.payableHours.toFixed(2)]);
     lines.push(['Deducted hours', row.deductedHours.toFixed(2)]);
     lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
+    lines.push(['Pending OT hours', row.pendingOtHours.toFixed(2)]);
+    lines.push(['Rejected excess hours', row.rejectedOtHours.toFixed(2)]);
     lines.push(['Cutoff pay', `PHP ${row.cutoffPay.toFixed(2)}`]);
     lines.push(['OT pay', `PHP ${row.otPay.toFixed(2)}`]);
     lines.push(['Gross pay', `PHP ${row.grossPhp.toFixed(2)}`]);
@@ -2358,6 +2584,9 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Actual hours', row.actualHours.toFixed(2)]);
     lines.push(['Payable hours', row.payableHours.toFixed(2)]);
     lines.push(['Deducted hours', row.deductedHours.toFixed(2)]);
+    lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
+    lines.push(['Pending OT hours', row.pendingOtHours.toFixed(2)]);
+    lines.push(['Rejected excess hours', row.rejectedOtHours.toFixed(2)]);
     lines.push(['Hour deduction', `PHP ${row.quickDeductionPhp.toFixed(2)}`]);
     lines.push(['Deductions', `PHP ${row.deductions.toFixed(2)}`]);
     lines.push(['Commission', `PHP ${row.commission.toFixed(2)}`]);
@@ -3157,7 +3386,7 @@ function cardKeyAction(event, callback) {
 
 function showPage() {
   const page = (location.hash || '#today').slice(1);
-  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'team', 'approvals'];
+  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'team', 'approvals', 'ai-alerts'];
   const employeeAllowed = ['today', 'hours', 'calendar', 'documents', 'requests'];
   const allowed = currentAccount?.role === 'employee' ? employeeAllowed : adminAllowed;
   const active = allowed.includes(page) ? page : 'today';
@@ -3169,6 +3398,7 @@ function showPage() {
   if (active === 'payroll') renderPayroll();
   if (active === 'team') renderTeamDirectory();
   if (active === 'approvals') renderApprovals();
+  if (active === 'ai-alerts') renderAiAlerts();
   if (active === 'hours') renderEmployeeHoursReport();
   if (active === 'calendar') renderLeaveCalendar();
   if (active === 'documents') renderDocuments();
@@ -3282,12 +3512,13 @@ async function adminClockOutEmployee(button) {
   button.disabled = true;
   const end = new Date().toISOString();
   if (usesSupabase()) {
-    const timeUpdate = await supabaseClient.from('time_entries').update({ clock_out: end, status: 'completed' }).eq('employee_id', employeeId).eq('status', 'working');
+    const timeUpdate = await supabaseClient.from('time_entries').update({ clock_out: end, status: 'completed' }).eq('employee_id', employeeId).eq('status', 'working').select('id');
     if (timeUpdate.error) {
       button.disabled = false;
       showToast(`Clock-out error: ${timeUpdate.error.message}`);
       return;
     }
+    for (const entry of timeUpdate.data || []) await requestAiOvertimeReview(entry.id);
     const presenceDelete = await supabaseClient.from('live_presence').delete().eq('employee_id', employeeId);
     if (presenceDelete.error) showToast(`Time ended, but live status error: ${presenceDelete.error.message}`);
     if ($('#deletedTimeRows') && employeeId) {
@@ -3301,6 +3532,7 @@ async function adminClockOutEmployee(button) {
     }
     await loadSupabaseTimeEntries();
     await loadSupabaseLivePresence();
+    await loadOvertimeAlerts();
   } else {
     localStorage.setItem(LIVE_PRESENCE_KEY, JSON.stringify(readLivePresence().filter(record => record.email !== email)));
   }
@@ -3309,6 +3541,7 @@ async function adminClockOutEmployee(button) {
   renderAttendance();
   renderScheduleWatch();
   renderReports();
+  renderAiAlerts();
   showToast(`${name} was clocked out.`);
 }
 
@@ -3908,20 +4141,31 @@ $('#payrollExport').onclick = () => {
   let header;
   let rows;
   if (selectedPayrollRole === 'coaches') {
-    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Deducted Hours', 'Approved OT Hours', 'USD Hourly Rate', 'PHP Rate', 'Gross USD Pay', 'Gross PHP Pay', 'Hour Deduction PHP', 'Manual Adjustments PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.hourlyUsd.toFixed(2), payrollUsdPhpRate().toFixed(4), row.grossUsd.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.netPay.toFixed(2), row.note]);
+    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Deducted Hours', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'USD Hourly Rate', 'PHP Rate', 'Gross USD Pay', 'Gross PHP Pay', 'Hour Deduction PHP', 'Manual Adjustments PHP', 'Net Pay PHP', 'Notes'];
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.hourlyUsd.toFixed(2), payrollUsdPhpRate().toFixed(4), row.grossUsd.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.netPay.toFixed(2), row.note]);
   } else if (selectedPayrollRole === 'admin') {
-    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Deducted Hours', 'Approved OT Hours', 'Cutoff Pay PHP', 'OT Pay PHP', 'Gross Pay PHP', 'Hour Deduction PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.cutoffPay.toFixed(2), row.otPay.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
+    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Deducted Hours', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'Cutoff Pay PHP', 'OT Pay PHP', 'Gross Pay PHP', 'Hour Deduction PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.cutoffPay.toFixed(2), row.otPay.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
   } else {
-    header = ['Employee', 'Role', 'Actual Hours', 'Payable Hours', 'Deducted Hours', 'Gross Pay PHP', 'Hour Deduction PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
+    header = ['Employee', 'Role', 'Actual Hours', 'Payable Hours', 'Deducted Hours', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'Gross Pay PHP', 'Hour Deduction PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
   }
   const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
   exportCsv(`sync2time-${selectedPayrollRole}-payroll-${isoDate(start)}-to-${isoDate(end)}.csv`, csv, `${selectedPayrollRole} payroll exported.`);
 };
 $('#payrollScrollLeft').onclick = () => $('#payrollTableScroll').scrollBy({ left: -520, behavior: 'smooth' });
 $('#payrollScrollRight').onclick = () => $('#payrollTableScroll').scrollBy({ left: 520, behavior: 'smooth' });
+['aiAlertStatus', 'aiAlertSeverity', 'aiAlertStart', 'aiAlertEnd', 'aiAlertEmployee'].forEach(id => {
+  const input = $(`#${id}`);
+  if (input) input.oninput = renderAiAlerts;
+  if (input) input.onchange = renderAiAlerts;
+});
+$('#aiAlertRefresh').onclick = async () => {
+  await detectOvertimeForCompletedEntries();
+  await loadOvertimeAlerts();
+  renderAiAlerts();
+  showToast('AI alerts refreshed.');
+};
 $('#sendPaystubs').onclick = sendApprovedPaystubs;
 $('#managePaystubTemplates').onclick = () => openPaystubEmailEditor();
 $('#paystubEmailForm').onsubmit = openManualPaystubGmail;
@@ -4227,6 +4471,12 @@ document.body.addEventListener('click', async event => {
     await adminClockOutEmployee(adminClockOut);
     return;
   }
+  const aiAlertAction = event.target.closest('[data-ai-alert-action]');
+  if (aiAlertAction) {
+    event.stopPropagation();
+    await updateAiAlertAction(aiAlertAction.dataset.aiAlertId, aiAlertAction.dataset.aiAlertAction);
+    return;
+  }
   const adjustmentButton = event.target.closest('[data-edit-adjustment]');
   if (adjustmentButton) {
     event.stopPropagation();
@@ -4298,6 +4548,7 @@ document.body.addEventListener('click', async event => {
   renderHolidayCalendar();
   renderLeaveCalendar();
   renderApprovals();
+  renderAiAlerts();
   renderDocuments();
   renderDeletedTimeAlerts();
   renderReports();

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260709-quick-hours-1" />
+  <link rel="stylesheet" href="styles.css?v=20260710-ai-alerts-1" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -35,6 +35,7 @@
       <a class="nav-item admin-only" href="#payroll"><span>$</span> Payroll</a>
       <a class="nav-item admin-only" href="#team"><span>♧</span> Team</a>
       <a class="nav-item admin-only" href="#approvals"><span>✓</span> Approvals</a>
+      <a class="nav-item admin-only" href="#ai-alerts"><span>AI</span> AI Alerts</a>
       <a class="nav-item employee-only" href="#calendar"><span>◫</span> Leave Calendar</a>
       <a class="nav-item employee-only" href="#documents"><span>⇧</span> Coaching Docs</a>
       <a class="nav-item employee-only" href="#requests"><span>✎</span> My Requests</a>
@@ -170,7 +171,7 @@
         <span class="fx-source" id="payrollFxSource">Loading exchange rate…</span>
       </div>
       <div class="payroll-tabs" id="payrollTabs"><button class="payroll-tab active" data-payroll-role="coaches">Coaches</button><button class="payroll-tab" data-payroll-role="admin">Admin</button><button class="payroll-tab" data-payroll-role="webinar">Webinar</button><button class="payroll-tab" data-payroll-role="smm">SMM</button><button class="payroll-tab" data-payroll-role="other">Other</button></div>
-      <div class="payroll-summary"><article><span>EMPLOYEES</span><b id="payrollEmployeeCount">0</b></article><article><span>ACTUAL HOURS</span><b id="payrollActualHours">0h 00m</b></article><article><span>OT HOURS</span><b id="payrollOtHours">0h 00m</b></article><article><span>NET PAY</span><b id="payrollNetPay">₱0.00</b></article></div>
+      <div class="payroll-summary"><article><span>EMPLOYEES</span><b id="payrollEmployeeCount">0</b></article><article><span>ACTUAL HOURS</span><b id="payrollActualHours">0h 00m</b></article><article><span>APPROVED OT</span><b id="payrollOtHours">0h 00m</b></article><article><span>PENDING OT</span><b id="payrollPendingOtHours">0h 00m</b></article><article><span>REJECTED EXCESS</span><b id="payrollRejectedOtHours">0h 00m</b></article><article><span>NET PAY</span><b id="payrollNetPay">₱0.00</b></article></div>
       <div class="payroll-table-card"><div class="payroll-scroll-controls"><button class="secondary" id="payrollScrollLeft" type="button">← Left</button><span>Tip: click Actual Hrs or Hours to deduct time fast.</span><button class="secondary" id="payrollScrollRight" type="button">Right →</button></div><div class="payroll-table-scroll" id="payrollTableScroll"><div class="payroll-head" id="payrollHead"></div><div id="payrollRows"></div></div><div class="report-footer"><span id="payrollRangeLabel"></span><span id="payrollFooterHint">Click Edit to add adjustments, deductions, commissions, notes, and the paystub destination</span></div></div>
       <div class="bulk-paystub-card"><div><p class="eyebrow">PAYSTUB APPROVAL STATUS</p><h3 id="bulkPaystubTitle">Approve employees before manual Gmail sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><button class="start-btn" id="sendPaystubs" type="button" disabled>Use row Email</button></div>
       <div class="manual-email-card"><div><p class="eyebrow">MANUAL GOOGLE EMAIL</p><h3>Send paystubs one employee at a time</h3><p>Use the Email button beside an employee. Sync2Time downloads the correct PDF and opens an editable Gmail draft from hr@sync2va.com.</p></div><button class="secondary" id="managePaystubTemplates" type="button">Manage email templates</button></div>
@@ -184,6 +185,14 @@
     <section class="approval-section admin-only" id="approvals">
       <div class="section-title"><div><p class="eyebrow">APPROVAL CENTER</p><h2>Leave and time edit approvals</h2><p>Approve or reject employee leave filings and time correction requests.</p></div></div>
       <div class="approval-grid"><article class="approval-card"><h3>Leave requests</h3><div id="leaveApprovalRows"></div></article><article class="approval-card"><h3>Time edit requests</h3><div id="timeEditApprovalRows"></div></article><article class="approval-card"><h3>Overtime requests</h3><div id="overtimeApprovalRows"></div></article></div>
+    </section>
+
+    <section class="ai-alerts-section admin-only" id="ai-alerts">
+      <div class="section-title"><div><p class="eyebrow">SYNC2TIME AI ADMIN ASSISTANT</p><h2>AI Alerts</h2><p>Review exceeded-hours alerts. AI suggests only; admin makes the final decision.</p></div><button class="export" id="aiAlertRefresh" type="button">Refresh alerts</button></div>
+      <div class="ai-alert-rules" id="aiRoleRules"></div>
+      <div class="report-toolbar report-builder ai-alert-toolbar"><label class="filter-label">STATUS <select id="aiAlertStatus"><option value="new">New alerts</option><option value="all">All status</option><option value="pending_employee_explanation">Pending review</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="payroll_pending">Payroll pending</option><option value="reviewed">Reviewed</option></select></label><label class="filter-label">SEVERITY <select id="aiAlertSeverity"><option value="all">All severity</option><option value="high">High severity</option><option value="medium">Medium</option><option value="low">Low</option></select></label><label class="filter-label">FROM <input id="aiAlertStart" type="date"></label><label class="filter-label">TO <input id="aiAlertEnd" type="date"></label><label class="search"><span>AI</span><input id="aiAlertEmployee" placeholder="Search employee"></label></div>
+      <div class="ai-alert-summary"><article><span>NEW</span><b id="aiAlertNewCount">0</b></article><article><span>HIGH</span><b id="aiAlertHighCount">0</b></article><article><span>PENDING PAYROLL</span><b id="aiAlertPayrollCount">0</b></article><article><span>PENDING HOURS</span><b id="aiAlertPendingHours">0h 00m</b></article></div>
+      <div class="ai-alert-card"><div class="ai-alert-head"><span>EMPLOYEE</span><span>DATE</span><span>HOURS</span><span>SEVERITY</span><span>AI RECOMMENDATION</span><span>STATUS</span><span>ACTION</span></div><div id="aiAlertRows"></div><div class="report-footer"><span id="aiAlertCount">0 alerts</span><span>Unapproved excess is never added to payroll automatically</span></div></div>
     </section>
 
     <section class="employee-calendar-section employee-only" id="calendar">
@@ -293,6 +302,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260709-quick-hours-2"></script>
+  <script src="app.js?v=20260710-ai-alerts-1"></script>
 </body>
 </html>
