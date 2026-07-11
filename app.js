@@ -2630,6 +2630,7 @@ async function sendSampleBulkEmail() {
       testMode: true,
       testRecipient: recipient,
       employeeId: row.person.id,
+      employeeName: row.person.name,
       periodStart: isoDate(start),
       periodEnd: isoDate(end),
       filename: `TEST-${pdf.filename}`,
