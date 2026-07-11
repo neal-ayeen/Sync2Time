@@ -2586,11 +2586,21 @@ function renderPayroll() {
   $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · sends one paystub to each employee recipient from hr@sync2va.com`;
   $('#sendPaystubs').disabled = !ready;
   $('#sendPaystubs').textContent = ready ? `Send all ${selectedPayrollRole} paystubs` : 'Approve all first';
+  if ($('#sendEmployeeSamplePaystubs')) {
+    $('#sendEmployeeSamplePaystubs').disabled = !currentPayrollRows.length || !usesSupabase();
+    $('#sendEmployeeSamplePaystubs').textContent = currentPayrollRows.length
+      ? `Send sample email${currentPayrollRows.length === 1 ? '' : 's'} first`
+      : 'Send sample emails first';
+  }
   renderSampleBulkEmailPreview();
 }
 
 function sampleBulkEmailRows() {
   return currentPayrollRows;
+}
+
+function paystubRecipientForRow(row) {
+  return paystubRecipients.find(item => item.employee_id === row.person.id)?.recipient_email || '';
 }
 
 function renderSampleBulkEmailPreview() {
@@ -2659,6 +2669,53 @@ async function sendSampleBulkEmail() {
       button.disabled = false;
       button.textContent = originalText;
     }
+  }
+}
+
+async function sendEmployeeSamplePaystubs() {
+  if (!usesSupabase()) return showToast('Supabase must be connected before sending employee sample emails.');
+  const rows = currentPayrollRows;
+  if (!rows.length) return showToast('No payroll rows are available for this tab.');
+  const missing = rows.filter(row => !paystubRecipientForRow(row));
+  if (missing.length) return showToast(`Add paystub email first for: ${missing.slice(0, 3).map(row => row.person.name).join(', ')}${missing.length > 3 ? '...' : ''}`);
+  if (!confirm(`Send TEST paystub emails to ${rows.length} ${selectedPayrollRole} employee recipient${rows.length === 1 ? '' : 's'} now? This will not mark paystubs emailed.`)) return;
+  const button = $('#sendEmployeeSamplePaystubs');
+  const originalText = button?.textContent || 'Send sample emails first';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Preparing samples...';
+  }
+  const failures = [];
+  const { start, end } = payrollRange();
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index];
+    if (button) button.textContent = `Sending sample ${index + 1}/${rows.length}...`;
+    try {
+      const pdf = await buildEmployeePaystub(row.person.id, false);
+      if (!pdf?.base64) throw new Error('Could not create the sample paystub PDF');
+      await invokeEdgeFunction('send-paystubs', {
+        testMode: true,
+        testRecipient: paystubRecipientForRow(row),
+        employeeId: row.person.id,
+        employeeName: row.person.name,
+        periodStart: isoDate(start),
+        periodEnd: isoDate(end),
+        filename: `TEST-${pdf.filename}`,
+        pdfBase64: pdf.base64
+      });
+    } catch (error) {
+      failures.push(`${row.person.name}: ${error.message || 'sample send failed'}`);
+    }
+  }
+  if (button) {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+  if (failures.length) {
+    console.error('Employee sample email failures:', failures);
+    showToast(`${rows.length - failures.length} employee samples sent; ${failures.length} failed. First error: ${failures[0]}`);
+  } else {
+    showToast(`All ${rows.length} employee sample paystubs were sent.`);
   }
 }
 
@@ -4635,6 +4692,7 @@ $('#aiAlertRefresh').onclick = async () => {
   showToast('AI alerts refreshed.');
 };
 $('#sendPaystubs').onclick = sendApprovedPaystubs;
+if ($('#sendEmployeeSamplePaystubs')) $('#sendEmployeeSamplePaystubs').onclick = sendEmployeeSamplePaystubs;
 if ($('#sendSampleBulkEmail')) $('#sendSampleBulkEmail').onclick = sendSampleBulkEmail;
 $('#managePaystubTemplates').onclick = () => openPaystubEmailEditor();
 $('#paystubEmailForm').onsubmit = openManualPaystubGmail;

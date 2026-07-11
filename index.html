@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260711-bulk-paystub-email-1" />
+  <link rel="stylesheet" href="styles.css?v=20260712-employee-sample-paystubs-1" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -173,7 +173,7 @@
       <div class="payroll-tabs" id="payrollTabs"><button class="payroll-tab active" data-payroll-role="coaches">Coaches</button><button class="payroll-tab" data-payroll-role="admin">Admin</button><button class="payroll-tab" data-payroll-role="webinar">Webinar</button><button class="payroll-tab" data-payroll-role="smm">SMM</button><button class="payroll-tab" data-payroll-role="other">Other</button></div>
       <div class="payroll-summary"><article><span>EMPLOYEES</span><b id="payrollEmployeeCount">0</b></article><article><span>ACTUAL HOURS</span><b id="payrollActualHours">0h 00m</b></article><article><span>APPROVED OT</span><b id="payrollOtHours">0h 00m</b></article><article><span>PENDING OT</span><b id="payrollPendingOtHours">0h 00m</b></article><article><span>REJECTED EXCESS</span><b id="payrollRejectedOtHours">0h 00m</b></article><article><span>NET PAY</span><b id="payrollNetPay">₱0.00</b></article></div>
       <div class="payroll-table-card"><div class="payroll-scroll-controls"><button class="secondary" id="payrollScrollLeft" type="button">← Left</button><span>Tip: click Actual Hrs or Hours to deduct time fast.</span><button class="secondary" id="payrollScrollRight" type="button">Right →</button></div><div class="payroll-table-scroll" id="payrollTableScroll"><div class="payroll-head" id="payrollHead"></div><div id="payrollRows"></div></div><div class="report-footer"><span id="payrollRangeLabel"></span><span id="payrollFooterHint">Click Edit to add adjustments, deductions, commissions, notes, and the paystub destination</span></div></div>
-      <div class="bulk-paystub-card"><div><p class="eyebrow">PAYSTUB APPROVAL STATUS</p><h3 id="bulkPaystubTitle">Approve employees before manual Gmail sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><button class="start-btn" id="sendPaystubs" type="button" disabled>Use row Email</button></div>
+      <div class="bulk-paystub-card"><div><p class="eyebrow">PAYSTUB APPROVAL STATUS</p><h3 id="bulkPaystubTitle">Approve employees before manual Gmail sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><div class="bulk-paystub-actions"><button class="secondary" id="sendEmployeeSamplePaystubs" type="button">Send sample emails</button><button class="start-btn" id="sendPaystubs" type="button" disabled>Use row Email</button></div></div>
       <div class="manual-email-card"><div><p class="eyebrow">MANUAL GOOGLE EMAIL</p><h3>Send paystubs one employee at a time</h3><p>Use the Email button beside an employee. Sync2Time downloads the correct PDF and opens an editable Gmail draft from hr@sync2va.com.</p></div><button class="secondary" id="managePaystubTemplates" type="button">Manage email templates</button></div>
       <div class="sample-bulk-email-card"><div><p class="eyebrow">BULK EMAIL TEST</p><h3>Sample bulk email checker</h3><p id="sampleBulkEmailPreview">Select a payroll tab to preview the sample email source.</p></div><label>Send sample to<input id="sampleBulkEmailRecipient" type="email" value="hr@sync2va.com"></label><button class="secondary" id="sendSampleBulkEmail" type="button">Send sample email</button></div>
     </section>
@@ -303,6 +303,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260711-bulk-paystub-email-1"></script>
+  <script src="app.js?v=20260712-employee-sample-paystubs-1"></script>
 </body>
 </html>
