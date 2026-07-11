@@ -334,6 +334,40 @@ function usesSupabase() {
   return !!supabaseClient && !!supabaseSession;
 }
 
+async function invokeEdgeFunction(name, payload) {
+  if (!usesSupabase()) throw new Error('Supabase session is required.');
+  let token = supabaseSession?.access_token;
+  if (!token && supabaseClient?.auth) {
+    const { data } = await supabaseClient.auth.getSession();
+    token = data.session?.access_token;
+  }
+  if (!token) throw new Error('Your admin login session expired. Please sign in again.');
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!response.ok || data?.ok === false || data?.error) {
+    let message = data?.error || text || `Edge Function returned status ${response.status}`;
+    if (payload?.testMode && /Paystub is not approved/i.test(message)) {
+      message = 'Supabase is still running the older send-paystubs function. Deploy the updated send-paystubs/index.ts, then try the sample again.';
+    }
+    throw new Error(message);
+  }
+  return data || { ok: true };
+}
+
 function profileToPerson(profile, index = 0) {
   if (!profile) return null;
   const start = profile.schedule_start ? profile.schedule_start.slice(0, 5) : null;
@@ -2592,19 +2626,15 @@ async function sendSampleBulkEmail() {
     const pdf = await buildEmployeePaystub(row.person.id, false);
     if (!pdf?.base64) throw new Error('Could not create the sample paystub PDF');
     const { start, end } = payrollRange();
-    const { data, error } = await supabaseClient.functions.invoke('send-paystubs', {
-      body: {
-        testMode: true,
-        testRecipient: recipient,
-        employeeId: row.person.id,
-        periodStart: isoDate(start),
-        periodEnd: isoDate(end),
-        filename: `TEST-${pdf.filename}`,
-        pdfBase64: pdf.base64
-      }
+    await invokeEdgeFunction('send-paystubs', {
+      testMode: true,
+      testRecipient: recipient,
+      employeeId: row.person.id,
+      periodStart: isoDate(start),
+      periodEnd: isoDate(end),
+      filename: `TEST-${pdf.filename}`,
+      pdfBase64: pdf.base64
     });
-    if (error) throw new Error(error.message);
-    if (data?.error) throw new Error(data.error);
     showToast(`Sample paystub email sent to ${recipient}.`);
   } catch (error) {
     showToast(`Sample email failed: ${error.message || 'unknown error'}`);
@@ -3602,16 +3632,13 @@ async function sendApprovedPaystubs() {
     button.textContent = `Sending ${index + 1}/${rows.length}…`;
     try {
       const pdf = await buildEmployeePaystub(row.person.id, false);
-      const { error } = await supabaseClient.functions.invoke('send-paystubs', {
-        body: {
-          employeeId: row.person.id,
-          periodStart: isoDate(start),
-          periodEnd: isoDate(end),
-          filename: pdf.filename,
-          pdfBase64: pdf.base64
-        }
+      await invokeEdgeFunction('send-paystubs', {
+        employeeId: row.person.id,
+        periodStart: isoDate(start),
+        periodEnd: isoDate(end),
+        filename: pdf.filename,
+        pdfBase64: pdf.base64
       });
-      if (error) throw error;
     } catch (error) {
       failures.push(`${row.person.name}: ${error.message || 'send failed'}`);
     }
@@ -3621,7 +3648,7 @@ async function sendApprovedPaystubs() {
   renderPayroll();
   if (failures.length) {
     console.error('Paystub email failures:', failures);
-    showToast(`${rows.length - failures.length} sent; ${failures.length} failed. Check the browser console and Edge Function logs.`);
+    showToast(`${rows.length - failures.length} sent; ${failures.length} failed. First error: ${failures[0]}`);
   } else {
     showToast(`All ${rows.length} paystubs were emailed successfully.`);
   }
