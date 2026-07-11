@@ -2582,31 +2582,32 @@ function renderPayroll() {
   const approvedCount = currentPayrollRows.filter(row => row.paystubApproved).length;
   const recipientCount = currentPayrollRows.filter(row => paystubRecipients.some(item => item.employee_id === row.person.id)).length;
   const ready = currentPayrollRows.length > 0 && approvedCount === currentPayrollRows.length && recipientCount === currentPayrollRows.length;
-  $('#bulkPaystubTitle').textContent = ready ? `${selectedPayrollRole} paystubs are ready for bulk Gmail sending` : 'Approve all paystubs before bulk Gmail sending';
-  $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · sender: hr@sync2va.com`;
+  $('#bulkPaystubTitle').textContent = ready ? `Bulk ${selectedPayrollRole} paystubs are ready` : `Approve every ${selectedPayrollRole} paystub before bulk sending`;
+  $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · sends one paystub to each employee recipient from hr@sync2va.com`;
   $('#sendPaystubs').disabled = !ready;
-  $('#sendPaystubs').textContent = ready ? 'Send approved paystubs' : 'Approve all first';
+  $('#sendPaystubs').textContent = ready ? `Send all ${selectedPayrollRole} paystubs` : 'Approve all first';
   renderSampleBulkEmailPreview();
 }
 
-function sampleBulkEmailRow() {
-  return currentPayrollRows.find(row => paystubRecipients.some(item => item.employee_id === row.person.id)) || currentPayrollRows[0] || null;
+function sampleBulkEmailRows() {
+  return currentPayrollRows;
 }
 
 function renderSampleBulkEmailPreview() {
   const preview = $('#sampleBulkEmailPreview');
   if (!preview) return;
-  const row = sampleBulkEmailRow();
+  const rows = sampleBulkEmailRows();
   if ($('#sampleBulkEmailRecipient') && !$('#sampleBulkEmailRecipient').value) $('#sampleBulkEmailRecipient').value = 'hr@sync2va.com';
   const button = $('#sendSampleBulkEmail');
-  if (!row) {
+  if (!rows.length) {
     preview.textContent = 'No employee rows are available in this payroll tab yet.';
     if (button) button.disabled = true;
     return;
   }
   const { start, end } = payrollRange();
-  preview.textContent = `Sample will use ${row.person.name}'s ${selectedPayrollRole} paystub for ${businessDateLabel(start)} to ${businessDateLabel(end)}. It sends only to the test email below and does not mark the employee emailed.`;
+  preview.textContent = `Bulk test will send ${rows.length} ${selectedPayrollRole} sample paystub${rows.length === 1 ? '' : 's'} for ${businessDateLabel(start)} to ${businessDateLabel(end)} to the test email below. It does not email employees and does not mark paystubs emailed.`;
   if (button) button.disabled = !usesSupabase();
+  if (button) button.textContent = `Send ${rows.length} sample email${rows.length === 1 ? '' : 's'}`;
 }
 
 async function sendSampleBulkEmail() {
@@ -2615,28 +2616,42 @@ async function sendSampleBulkEmail() {
   const recipient = (input?.value || '').trim().toLowerCase();
   if (!recipient || !recipient.includes('@')) return showToast('Add a valid email address for the sample.');
   if (!usesSupabase()) return showToast('Supabase must be connected before sending a sample email.');
-  const row = sampleBulkEmailRow();
-  if (!row) return showToast('No payroll row is available for a sample email.');
+  const rows = sampleBulkEmailRows();
+  if (!rows.length) return showToast('No payroll rows are available for sample bulk email.');
   const originalText = button?.textContent || 'Send sample email';
   if (button) {
     button.disabled = true;
-    button.textContent = 'Sending sample...';
+    button.textContent = 'Preparing samples...';
   }
+  const failures = [];
   try {
-    const pdf = await buildEmployeePaystub(row.person.id, false);
-    if (!pdf?.base64) throw new Error('Could not create the sample paystub PDF');
     const { start, end } = payrollRange();
-    await invokeEdgeFunction('send-paystubs', {
-      testMode: true,
-      testRecipient: recipient,
-      employeeId: row.person.id,
-      employeeName: row.person.name,
-      periodStart: isoDate(start),
-      periodEnd: isoDate(end),
-      filename: `TEST-${pdf.filename}`,
-      pdfBase64: pdf.base64
-    });
-    showToast(`Sample paystub email sent to ${recipient}.`);
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      if (button) button.textContent = `Sending sample ${index + 1}/${rows.length}...`;
+      try {
+        const pdf = await buildEmployeePaystub(row.person.id, false);
+        if (!pdf?.base64) throw new Error('Could not create the sample paystub PDF');
+        await invokeEdgeFunction('send-paystubs', {
+          testMode: true,
+          testRecipient: recipient,
+          employeeId: row.person.id,
+          employeeName: row.person.name,
+          periodStart: isoDate(start),
+          periodEnd: isoDate(end),
+          filename: `TEST-${pdf.filename}`,
+          pdfBase64: pdf.base64
+        });
+      } catch (error) {
+        failures.push(`${row.person.name}: ${error.message || 'sample send failed'}`);
+      }
+    }
+    if (failures.length) {
+      console.error('Sample bulk email failures:', failures);
+      showToast(`${rows.length - failures.length} sample sent; ${failures.length} failed. First error: ${failures[0]}`);
+    } else {
+      showToast(`All ${rows.length} sample paystubs were sent to ${recipient}.`);
+    }
   } catch (error) {
     showToast(`Sample email failed: ${error.message || 'unknown error'}`);
   } finally {
@@ -2656,6 +2671,24 @@ function loadPaystubLogo() {
   });
 }
 
+function compactPaystubLogoSource(image) {
+  try {
+    const canvas = document.createElement('canvas');
+    const size = 240;
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    context.clearRect(0, 0, size, size);
+    const ratio = Math.min(size / image.naturalWidth, size / image.naturalHeight);
+    const width = image.naturalWidth * ratio;
+    const height = image.naturalHeight * ratio;
+    context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
+    return canvas.toDataURL('image/png');
+  } catch {
+    return image;
+  }
+}
+
 async function buildEmployeePaystub(employeeId, shouldDownload = true) {
   const row = currentPayrollRows.find(item => item.person.id === employeeId);
   if (!row) return showToast('Payroll row not found.');
@@ -2672,7 +2705,7 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
   doc.rect(0, 116, pageWidth, 10, 'F');
   try {
     const logo = await loadPaystubLogo();
-    doc.addImage(logo, 'PNG', 32, 18, 90, 90);
+    doc.addImage(compactPaystubLogoSource(logo), 'PNG', 32, 18, 90, 90, undefined, 'FAST');
   } catch {
     // The paystub remains usable if the browser blocks a local logo image.
   }
