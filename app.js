@@ -1701,6 +1701,17 @@ function overtimeRoleName(role = '') {
   return 'Other';
 }
 
+function currentEmployeeJobRole() {
+  if (currentProfile?.job_role) return currentProfile.job_role;
+  if (currentAccount?.jobRole) return currentAccount.jobRole;
+  const email = currentAccount?.email?.toLowerCase();
+  return rosterSource().find(person => person.email?.toLowerCase() === email)?.role || '';
+}
+
+function longSessionPromptAppliesToCurrentEmployee() {
+  return currentAccount?.role === 'employee' && overtimeRoleName(currentEmployeeJobRole()) === 'Coach';
+}
+
 function roleHourRuleFor(role = '') {
   const family = overtimeRoleName(role);
   return roleHourRules.find(rule => rule.role_name === family) || DEFAULT_ROLE_HOUR_RULES.find(rule => rule.role_name === family) || DEFAULT_ROLE_HOUR_RULES.at(-1);
@@ -4109,7 +4120,12 @@ async function clearEmployeeDryRunTime(button) {
 }
 
 function checkLongSession() {
-  if (currentAccount?.role !== 'employee' || !state.running || longSessionClockOutPending) return;
+  if (!longSessionPromptAppliesToCurrentEmployee()) {
+    longSessionDeadline = null;
+    if ($('#longSessionBackdrop')) $('#longSessionBackdrop').hidden = true;
+    return;
+  }
+  if (!state.running || longSessionClockOutPending) return;
   const runningSeconds = secondsBetween(state.running.start, Date.now());
   const nextCheckAt = Number(state.running.nextLongSessionCheckAt) || (new Date(state.running.start).getTime() + LONG_SESSION_SECONDS * 1000);
   if (runningSeconds < LONG_SESSION_SECONDS || Date.now() < nextCheckAt) return;
