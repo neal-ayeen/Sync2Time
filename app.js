@@ -567,10 +567,44 @@ async function createSupabaseTimeEntry(task, start) {
     .select('id')
     .single();
   if (error) {
+    if (/one_working_shift_per_employee|duplicate key/i.test(error.message || '')) {
+      const resumed = await resumeExistingSupabaseShift(task);
+      if (resumed) return resumed;
+    }
     showToast(`Clock-in error: ${error.message}`);
     return null;
   }
-  return data.id;
+  return { id: data.id, start, task, resumed: false };
+}
+
+async function resumeExistingSupabaseShift(task) {
+  if (!usesSupabase() || !currentProfile?.id) return null;
+  const { data, error } = await supabaseClient
+    .from('time_entries')
+    .select('id, task, clock_in')
+    .eq('employee_id', currentProfile.id)
+    .eq('status', 'working')
+    .order('clock_in', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data?.id) {
+    showToast(`Clock-in recovery error: ${error?.message || 'No active shift found to resume.'}`);
+    return null;
+  }
+  const cleanTask = task || data.task || 'Tracked time';
+  if (cleanTask !== data.task) {
+    await supabaseClient
+      .from('time_entries')
+      .update({ task: cleanTask })
+      .eq('id', data.id)
+      .eq('employee_id', currentProfile.id);
+  }
+  return {
+    id: data.id,
+    start: new Date(data.clock_in).getTime(),
+    task: cleanTask,
+    resumed: true
+  };
 }
 
 async function completeSupabaseTimeEntry(end) {
@@ -1206,13 +1240,17 @@ function totalSeconds() {
 function hydrateEmployeeStateFromSupabase(account = currentAccount) {
   if (!usesSupabase() || account?.role !== 'employee' || !currentProfile?.id) return;
   const todayKey = isoDate(new Date());
+  const active = supabaseTimeEntries.find(entry =>
+    entry.employee_id === currentProfile.id &&
+    entry.clock_in &&
+    (!entry.clock_out || entry.status === 'working')
+  );
   const ownEntries = supabaseTimeEntries.filter(entry =>
     entry.employee_id === currentProfile.id &&
     entry.clock_in &&
     isoDate(new Date(entry.clock_in)) === todayKey
   );
   const completed = ownEntries.filter(entry => entry.clock_out && entry.status !== 'working');
-  const active = ownEntries.find(entry => !entry.clock_out || entry.status === 'working');
   const liveRecord = supabaseLivePresence.find(record => record.employeeId === currentProfile.id || record.email === account?.email);
   state.entries = completed.map(entry => ({
     task: entry.task || 'Tracked time',
@@ -1232,7 +1270,7 @@ function hydrateEmployeeStateFromSupabase(account = currentAccount) {
   } else {
     state.running = null;
   }
-  const starts = ownEntries.map(entry => new Date(entry.clock_in).getTime()).filter(Number.isFinite);
+  const starts = [...ownEntries, active].filter(Boolean).map(entry => new Date(entry.clock_in).getTime()).filter(Number.isFinite);
   const ends = completed.map(entry => new Date(entry.clock_out).getTime()).filter(Number.isFinite);
   state.clockIn = starts.length ? Math.min(...starts) : null;
   state.clockOut = active ? null : (ends.length ? Math.max(...ends) : null);
@@ -4146,14 +4184,16 @@ $('#toggleTimer').onclick = async () => {
     const task = $('#taskInput').value || 'Untitled task';
     const note = $('#taskNoteInput').value.trim();
     const start = Date.now();
-    const timeEntryId = await createSupabaseTimeEntry(task, start);
-    if (usesSupabase() && !timeEntryId) return;
+    const timeEntry = await createSupabaseTimeEntry(task, start);
+    if (usesSupabase() && !timeEntry) return;
     await loadSupabaseTimeEntries();
-    state.running = { task, note, start, timeEntryId, nextLongSessionCheckAt: start + LONG_SESSION_SECONDS * 1000 };
-    state.clockIn = state.clockIn || start;
+    const runningStart = timeEntry?.start || start;
+    const runningTask = timeEntry?.task || task;
+    state.running = { task: runningTask, note, start: runningStart, timeEntryId: timeEntry?.id || null, nextLongSessionCheckAt: runningStart + LONG_SESSION_SECONDS * 1000 };
+    state.clockIn = state.clockIn || runningStart;
     state.clockOut = null;
     syncOwnLivePresence();
-    showToast('Clocked in.');
+    showToast(timeEntry?.resumed ? 'Existing active shift resumed. You are clocked in.' : 'Clocked in.');
   }
   if (interval) clearInterval(interval);
   if (state.running || state.lunch) interval = setInterval(render, 1000);
