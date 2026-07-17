@@ -694,7 +694,7 @@ function syncOwnLivePresence() {
     });
 }
 
-function liveEmployees() {
+function localLiveEmployees() {
   return readLivePresence().map((record, index) => {
     const roster = rosterSource().find(person => person.email === record.email || person.name === record.name);
     const seconds = secondsBetween(record.clockInAt, Date.now());
@@ -720,6 +720,79 @@ function liveEmployees() {
       liveSeconds: seconds
     };
   });
+}
+
+function isActiveSupabaseTimeEntry(entry) {
+  return !!entry?.employee_id && !!entry?.clock_in && entry.status !== 'deleted' && (entry.status === 'working' || !entry.clock_out);
+}
+
+function liveEmployeeFromActiveTimeEntry(entry, index) {
+  const base = attendanceRecordFromSupabase(entry, index);
+  const live = supabaseLivePresence.find(record =>
+    record.employeeId === entry.employee_id ||
+    record.email?.toLowerCase() === base.email?.toLowerCase()
+  );
+  const liveActivity = live ? parseLiveActivity(live.task, live.note) : null;
+  const entryActivity = entry.task ? parseLiveActivity(entry.task) : null;
+  return {
+    ...base,
+    id: entry.employee_id,
+    employeeId: entry.employee_id,
+    timeEntryId: entry.id,
+    task: liveActivity?.task || entryActivity?.task || base.task || 'Working',
+    note: liveActivity?.note || entryActivity?.note || '',
+    clockOut: '—',
+    status: 'clocked',
+    liveSeconds: typeof base.liveSeconds === 'number'
+      ? base.liveSeconds
+      : secondsBetween(new Date(entry.clock_in), Date.now())
+  };
+}
+
+function activeClockedEmployees() {
+  if (!usesSupabase()) return localLiveEmployees();
+  const activeEntries = supabaseTimeEntries
+    .filter(isActiveSupabaseTimeEntry)
+    .map(liveEmployeeFromActiveTimeEntry);
+  const activeEmployeeIds = new Set(activeEntries.map(person => person.employeeId).filter(Boolean));
+  const liveOnly = supabaseLivePresence
+    .filter(record => record.employeeId && !activeEmployeeIds.has(record.employeeId))
+    .map((record, index) => {
+      const roster = rosterSource().find(person =>
+        person.email?.toLowerCase() === record.email?.toLowerCase() ||
+        person.id === record.employeeId ||
+        person.name === record.name
+      );
+      const seconds = secondsBetween(record.clockInAt, Date.now());
+      const activity = parseLiveActivity(record.task, record.note);
+      return {
+        ...(roster || {}),
+        id: record.employeeId,
+        employeeId: record.employeeId,
+        name: record.name,
+        email: record.email,
+        role: record.role || roster?.role || 'Employee',
+        department: record.department || roster?.department || 'Employee',
+        task: activity.task || 'Working',
+        note: activity.note || '',
+        initials: roster?.initials || initials(record.name),
+        color: roster?.color || palette[(activeEntries.length + index) % palette.length],
+        rate: roster?.rate ?? null,
+        scheduledStart: roster?.scheduledStart ?? null,
+        scheduledEnd: roster?.scheduledEnd ?? null,
+        schedule: roster?.schedule || 'Not assigned',
+        clockIn: formatClock(record.clockInAt),
+        clockOut: '—',
+        worked: formatDuration(seconds),
+        status: 'clocked',
+        liveSeconds: seconds
+      };
+    });
+  return [...activeEntries, ...liveOnly];
+}
+
+function liveEmployees() {
+  return activeClockedEmployees();
 }
 
 function supabaseProfileFromLive(record) {
@@ -750,6 +823,7 @@ function attendanceRecordFromSupabase(entry, index) {
   const clockOut = entry.clock_out ? new Date(entry.clock_out) : null;
   const seconds = clockIn ? secondsBetween(clockIn, clockOut || Date.now()) : 0;
   const name = profile.full_name || roster?.name || 'Employee';
+  const activity = entry.task ? parseLiveActivity(entry.task) : null;
   return {
     ...(roster || {}),
     id: entry.id,
@@ -758,7 +832,8 @@ function attendanceRecordFromSupabase(entry, index) {
     email: profile.email || roster?.email || entry.employee_id,
     role: profile.job_role || roster?.role || 'Employee',
     department: profile.department || roster?.department || '',
-    task: entry.task || roster?.task || 'Tracked time',
+    task: activity?.task || roster?.task || 'Tracked time',
+    note: activity?.note || '',
     initials: roster?.initials || initials(name),
     color: roster?.color || palette[index % palette.length],
     date: clockIn ? businessDateLabel(clockIn, { month: 'short', day: 'numeric' }) : 'Today',
