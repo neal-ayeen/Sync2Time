@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260717-active-attendance-1" />
+  <link rel="stylesheet" href="styles.css?v=20260719-admin-clockout-edit-audit-1" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -36,6 +36,7 @@
       <a class="nav-item admin-only" href="#team"><span>♧</span> Team</a>
       <a class="nav-item admin-only" href="#approvals"><span>✓</span> Approvals</a>
       <a class="nav-item admin-only" href="#ai-alerts"><span>AI</span> AI Alerts</a>
+      <a class="nav-item admin-only" href="#audit"><span>LOG</span> Audit Log</a>
       <a class="nav-item employee-only" href="#calendar"><span>◫</span> Leave Calendar</a>
       <a class="nav-item employee-only" href="#documents"><span>⇧</span> Coaching Docs</a>
       <a class="nav-item employee-only" href="#requests"><span>✎</span> My Requests</a>
@@ -196,6 +197,11 @@
       <div class="ai-alert-card"><div class="ai-alert-head"><span>EMPLOYEE</span><span>DATE</span><span>HOURS</span><span>SEVERITY</span><span>AI RECOMMENDATION</span><span>STATUS</span><span>ACTION</span></div><div id="aiAlertRows"></div><div class="report-footer"><span id="aiAlertCount">0 alerts</span><span>Unapproved excess is never added to payroll automatically</span></div></div>
     </section>
 
+    <section class="audit-section admin-only" id="audit">
+      <div class="section-title"><div><p class="eyebrow">ADMIN AUDIT LOG</p><h2>Last 30 days of time activity</h2><p>Clock-ins, clock-outs, admin clock-outs, and employee time-edit requests.</p></div><button class="export" id="auditExport" type="button">⇩ Export audit log</button></div>
+      <div class="audit-card"><div class="audit-head"><span>DATE / TIME</span><span>EMPLOYEE</span><span>ACTIVITY</span><span>DETAILS</span><span>STATUS</span></div><div id="auditRows"></div><div class="report-footer"><span id="auditCount">0 audit records</span><span>Limited to the most recent 30 days</span></div></div>
+    </section>
+
     <section class="employee-calendar-section employee-only" id="calendar">
       <div class="section-title"><div><p class="eyebrow">LEAVE CALENDAR</p><h2>File your leave</h2><p>Pick dates for leave. The app blocks a date if another employee already filed leave for that same day.</p></div><button class="start-btn" id="openLeaveRequest">+ File leave</button></div>
       <div class="employee-calendar-card"><div class="calendar-head"><button id="leaveCalendarPrev" aria-label="Previous month">‹</button><h3 id="leaveCalendarMonth">—</h3><button id="leaveCalendarNext" aria-label="Next month">›</button></div><div class="calendar-week"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div><div id="leaveCalendar" class="holiday-calendar leave-calendar"></div></div>
@@ -303,6 +309,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260717-active-attendance-1"></script>
+  <script src="app.js?v=20260719-admin-clockout-edit-audit-1"></script>
 </body>
 </html>

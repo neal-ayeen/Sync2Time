@@ -156,6 +156,8 @@ let manualPayrollFxOverride = Number(localStorage.getItem('sync2time-payroll-usd
 const liveCalculatorOpenedAt = Date.now();
 const LIVE_PRESENCE_KEY = 'sync2time-live-presence';
 const LIVE_ACTIVITY_PREFIX = '__sync2time__';
+const TIME_EDIT_ADD_PREFIX = '[Sync2Time add time] ';
+const TIME_EDIT_ENTRY_PREFIX = '[Sync2Time edit entry:';
 
 $('#todayLabel').textContent = businessDateLabel(todayDate, { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
 
@@ -258,6 +260,48 @@ function businessEndFromKey(key) {
 function businessDateTime(key, time = '00:00') {
   const normalized = String(time || '00:00').length === 5 ? `${time}:00` : String(time || '00:00:00');
   return new Date(`${key}T${normalized}${BUSINESS_UTC_OFFSET}`);
+}
+
+function businessDateTimeRange(key, startTime, endTime) {
+  const start = businessDateTime(key, startTime);
+  let end = businessDateTime(key, endTime);
+  if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end <= start) {
+    end = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return { start, end };
+}
+
+function timeEditHours(key, startTime, endTime) {
+  const { start, end } = businessDateTimeRange(key, startTime, endTime);
+  return Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end > start
+    ? secondsBetween(start, end) / 3600
+    : 0;
+}
+
+function businessTimeInput(date) {
+  const parts = businessParts(date);
+  const hour = parts.hour === '24' ? '00' : parts.hour;
+  return `${hour}:${parts.minute}`;
+}
+
+function isAddTimeEditRequest(request) {
+  return String(request?.reason || '').startsWith(TIME_EDIT_ADD_PREFIX);
+}
+
+function timeEditSourceEntryId(reason = '') {
+  const match = String(reason || '').match(/^\[Sync2Time edit entry:([^\]]+)\]\s*/);
+  return match?.[1] || '';
+}
+
+function timeEditReasonWithSource(entryId, reason = '') {
+  return entryId ? `${TIME_EDIT_ENTRY_PREFIX}${entryId}] ${reason || ''}` : reason;
+}
+
+function cleanTimeEditReason(reason = '') {
+  return String(reason || '')
+    .replace(TIME_EDIT_ADD_PREFIX, '')
+    .replace(/^\[Sync2Time edit entry:[^\]]+\]\s*/, '')
+    .trim();
 }
 
 function businessDateLabel(date, options = {}) {
@@ -583,7 +627,7 @@ async function resumeExistingSupabaseShift(task) {
     .from('time_entries')
     .select('id, task, clock_in')
     .eq('employee_id', currentProfile.id)
-    .eq('status', 'working')
+    .or('status.eq.working,clock_out.is.null')
     .order('clock_in', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -1055,12 +1099,15 @@ async function loadSupabaseRequests() {
 
 async function applyApprovedTimeEdit(request, silent = false) {
   if (!usesSupabase() || !request?.employeeId) return { ok: false, message: 'The request is missing its employee ID.' };
-  const start = businessDateTime(request.date, request.clockIn);
-  const end = businessDateTime(request.date, request.clockOut);
+  const { start, end } = businessDateTimeRange(request.date, request.clockIn, request.clockOut);
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) {
     return { ok: false, message: 'The requested clock-out must be after clock-in.' };
   }
-  const existing = supabaseTimeEntries.find(entry =>
+  const addAsSeparateEntry = isAddTimeEditRequest(request);
+  const sourceEntryId = timeEditSourceEntryId(request.reason);
+  const existing = addAsSeparateEntry ? null : sourceEntryId
+    ? supabaseTimeEntries.find(entry => entry.id === sourceEntryId && entry.employee_id === request.employeeId)
+    : supabaseTimeEntries.find(entry =>
     entry.employee_id === request.employeeId &&
     entry.clock_in &&
     isoDate(new Date(entry.clock_in)) === request.date
@@ -1075,7 +1122,7 @@ async function applyApprovedTimeEdit(request, silent = false) {
   } else {
     result = await supabaseClient.from('time_entries').insert({
       employee_id: request.employeeId,
-      task: 'Approved time correction',
+      task: addAsSeparateEntry ? `Approved added time${cleanTimeEditReason(request.reason) ? ` - ${cleanTimeEditReason(request.reason)}` : ''}` : 'Approved time correction',
       clock_in: start.toISOString(),
       clock_out: end.toISOString(),
       status: 'completed'
@@ -1093,16 +1140,16 @@ async function repairApprovedTimeEdits() {
   approvedTimeEditRepairAttempted = true;
   const approved = timeEditRequests.filter(request => request.status === 'approved' && request.employeeId);
   for (const request of approved) {
-    const existing = supabaseTimeEntries.find(entry =>
+    const { start, end } = businessDateTimeRange(request.date, request.clockIn, request.clockOut);
+    const requestedStart = start.getTime();
+    const requestedEnd = end.getTime();
+    const alreadyApplied = supabaseTimeEntries.some(entry =>
       entry.employee_id === request.employeeId &&
       entry.clock_in &&
-      isoDate(new Date(entry.clock_in)) === request.date
+      entry.clock_out &&
+      Math.abs(new Date(entry.clock_in).getTime() - requestedStart) < 60000 &&
+      Math.abs(new Date(entry.clock_out).getTime() - requestedEnd) < 60000
     );
-    const requestedStart = businessDateTime(request.date, request.clockIn).getTime();
-    const requestedEnd = businessDateTime(request.date, request.clockOut).getTime();
-    const alreadyApplied = existing &&
-      Math.abs(new Date(existing.clock_in).getTime() - requestedStart) < 60000 &&
-      Math.abs(new Date(existing.clock_out).getTime() - requestedEnd) < 60000;
     if (!alreadyApplied) await applyApprovedTimeEdit(request, true);
   }
 }
@@ -1206,6 +1253,7 @@ async function refreshSupabaseData() {
   renderReports();
   renderPayroll();
   renderAiAlerts();
+  renderAuditLog();
   renderEmployeeHoursReport();
 }
 
@@ -1258,6 +1306,7 @@ function subscribeSupabaseRealtime() {
       renderTeamDirectory();
       renderReports();
       renderAiAlerts();
+      renderAuditLog();
       render();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'payroll_adjustments' }, async () => {
@@ -1290,6 +1339,7 @@ function subscribeSupabaseRealtime() {
       await loadSupabaseRequests();
       renderApprovals();
       renderEmployeeRequests();
+      renderAuditLog();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'overtime_requests' }, async () => {
       await loadSupabaseRequests();
@@ -1332,6 +1382,7 @@ function hydrateEmployeeStateFromSupabase(account = currentAccount) {
     seconds: secondsBetween(entry.clock_in, entry.clock_out),
     start: new Date(entry.clock_in).getTime(),
     end: new Date(entry.clock_out).getTime(),
+    timeEntryId: entry.id,
     remote: true
   }));
   if (active) {
@@ -1350,6 +1401,13 @@ function hydrateEmployeeStateFromSupabase(account = currentAccount) {
   state.clockIn = starts.length ? Math.min(...starts) : null;
   state.clockOut = active ? null : (ends.length ? Math.max(...ends) : null);
   save();
+}
+
+async function refreshOwnActiveSessionFromSupabase() {
+  if (!usesSupabase() || currentAccount?.role !== 'employee' || !currentProfile?.id) return;
+  await loadSupabaseTimeEntries();
+  await loadSupabaseLivePresence();
+  hydrateEmployeeStateFromSupabase(currentAccount);
 }
 
 function randomPassword() {
@@ -1707,7 +1765,11 @@ function render() {
     ...(state.lunch ? [{ task: 'Lunch break', seconds: secondsBetween(state.lunch.start, Date.now()), live: true, lunch: true }] : []),
     ...state.entries
   ];
-  entries.innerHTML = all.map((entry, index) => `<div class="entry dashboard-clickable" tabindex="0" role="button" data-entry-index="${index}"><div class="entry-title"><span class="project-dot ${entry.lunch ? 'blue' : entry.live ? 'coral' : 'blue'}"></span><div>${escapeHtml(entry.task)}<small>${entry.note ? escapeHtml(entry.note) : entry.live ? 'Currently active' : 'Tracked time'}</small></div></div><span class="entry-time">${formatDuration(entry.seconds)}</span><button class="delete-entry" title="Employee cannot edit time" hidden>×</button></div>`).join('');
+  entries.innerHTML = all.map((entry, index) => {
+    const canEdit = currentAccount?.role === 'employee' && !entry.live && !entry.lunch && entry.start && entry.end;
+    const editButton = canEdit ? `<button class="entry-edit-btn" data-entry-edit="${index}" data-entry-id="${entry.timeEntryId || ''}" data-entry-start="${entry.start}" data-entry-end="${entry.end}">Edit</button>` : '<span></span>';
+    return `<div class="entry dashboard-clickable" tabindex="0" role="button" data-entry-index="${index}"><div class="entry-title"><span class="project-dot ${entry.lunch ? 'blue' : entry.live ? 'coral' : 'blue'}"></span><div>${escapeHtml(entry.task)}<small>${entry.note ? escapeHtml(entry.note) : entry.live ? 'Currently active' : 'Tracked time'}</small></div></div><span class="entry-time">${formatDuration(entry.seconds)}</span>${editButton}</div>`;
+  }).join('');
   $('#emptyState').hidden = all.length > 0;
 
   const daily = [2.8, 4.1, Math.min(7.5, total / 3600), 3.4, 2.2, .3, 0];
@@ -1742,8 +1804,12 @@ function renderAttendance() {
     return (!term || searchable.includes(term)) && inDateRange && (filter === 'all' || person.status === filter);
   });
   $('#attendanceRows').innerHTML = rows.map(person => {
-    const deleteButton = person.id && person.status !== 'clocked' ? `<button class="delete-time-btn" data-delete-time="${person.id}" data-employee-id="${person.employeeId || ''}" data-employee-name="${encodeURIComponent(person.name)}" data-time-label="${encodeURIComponent(`${person.date} ${person.clockIn}-${person.clockOut}`)}">Delete</button>` : '<span>—</span>';
-    return `<div class="attendance-row" data-employee="${encodeURIComponent(person.name)}"><div class="person"><span class="person-avatar" style="background:${person.color}">${person.initials}</span><span>${person.name}<small>${person.role}</small></span></div><span class="attendance-date">${person.date}</span><span class="attendance-time">${person.clockIn}</span><span class="attendance-time">${person.clockOut}</span><span class="attendance-time">${person.worked}</span><span class="status ${person.status === 'clocked' ? 'live' : 'complete'}">${person.status === 'clocked' ? 'Clocked in' : 'Complete'}</span>${deleteButton}</div>`;
+    const actionButton = person.status === 'clocked'
+      ? `<button class="admin-clockout-btn" data-admin-clockout="${person.employeeId || person.id || ''}" data-clockout-email="${encodeURIComponent(person.email || '')}" data-clockout-name="${encodeURIComponent(person.name)}">Clock out</button>`
+      : person.id
+        ? `<button class="delete-time-btn" data-delete-time="${person.id}" data-employee-id="${person.employeeId || ''}" data-employee-name="${encodeURIComponent(person.name)}" data-time-label="${encodeURIComponent(`${person.date} ${person.clockIn}-${person.clockOut}`)}">Delete</button>`
+        : '<span>—</span>';
+    return `<div class="attendance-row" data-employee="${encodeURIComponent(person.name)}"><div class="person"><span class="person-avatar" style="background:${person.color}">${person.initials}</span><span>${person.name}<small>${person.role}</small></span></div><span class="attendance-date">${person.date}</span><span class="attendance-time">${person.clockIn}</span><span class="attendance-time">${person.clockOut}</span><span class="attendance-time">${person.worked}</span><span class="status ${person.status === 'clocked' ? 'live' : 'complete'}">${person.status === 'clocked' ? 'Clocked in' : 'Complete'}</span>${actionButton}</div>`;
   }).join('') || '<div class="empty-state">No employees match these filters.</div>';
   $('#reportCount').textContent = `${rows.length} employee record${rows.length === 1 ? '' : 's'}`;
   $('#clockedInCount').textContent = live.length;
@@ -1951,12 +2017,17 @@ function renderManagedEmployees() {
 
 function renderTeamDirectory() {
   const roster = allRosterWithExtras();
+  const activeEmployees = activeClockedEmployees();
   $('#teamRows').innerHTML = roster.map(person => {
     const access = managedEmployees.find(employee => employee.email === person.email || employee.name === person.name);
     const profile = usesSupabase() && person.id ? supabaseProfiles.find(item => item.id === person.id) : null;
     const isOffboarded = profile?.role && !isAllowedAccessRole(profile.role);
     const hasSupabaseAccess = !!(profile && !isOffboarded);
-    const live = readLivePresence().some(record => record.employeeId === person.id || record.email === person.email);
+    const live = activeEmployees.some(record =>
+      record.employeeId === person.id ||
+      record.id === person.id ||
+      record.email?.toLowerCase() === person.email?.toLowerCase()
+    );
     const editAction = `<button class="edit-employee-btn" data-edit-employee="${person.id || ''}" data-edit-email="${encodeURIComponent(person.email || '')}" data-edit-name="${encodeURIComponent(person.name)}">Edit</button>`;
     const offboardAction = `<button class="offboard-employee-btn" data-offboard-employee="${person.id || ''}" data-offboard-email="${encodeURIComponent(person.email || '')}" data-offboard-name="${encodeURIComponent(person.name)}">${isOffboarded ? 'Offboarded' : 'Offboard'}</button>`;
     const passwordLine = access?.tempPassword ? `<small>${access.email} · Pass: ${access.tempPassword}</small>` : `<small>${person.department || 'Employee'}</small>`;
@@ -2150,7 +2221,7 @@ function approvalRequestDetails(request, type) {
   return {
     typeLabel: 'Time edit request',
     timeLabel: `${request.clockIn}-${request.clockOut}`,
-    reason: request.reason || 'No notes provided.'
+    reason: cleanTimeEditReason(request.reason) || 'No notes provided.'
   };
 }
 
@@ -2221,6 +2292,7 @@ async function setRequestStatus(type, id, status) {
   renderApprovals();
   renderEmployeeRequests();
   renderPayroll();
+  renderAuditLog();
   showToast(`Request ${status}.`);
   return true;
 }
@@ -2231,9 +2303,59 @@ function renderEmployeeRequests() {
   const myEdits = timeEditRequests.filter(request => request.employeeEmail === currentAccount.email);
   const myOvertime = overtimeRequests.filter(request => request.employeeEmail === currentAccount.email);
   $('#myLeaveRows').innerHTML = myLeaves.map(request => `<div class="approval-row"><div><b>${request.date}</b><small>${escapeHtml(request.reason)}</small></div><span class="access-state ${request.status === 'pending' ? 'pending' : ''}">${request.status}</span></div>`).join('') || '<div class="empty-state">No leave requests yet.</div>';
-  $('#myTimeEditRows').innerHTML = myEdits.map(request => `<div class="approval-row"><div><b>${escapeHtml(request.date)}</b><small>${escapeHtml(request.clockIn)}-${escapeHtml(request.clockOut)}</small></div><span class="access-state ${request.status === 'pending' ? 'pending' : ''}">${request.status}</span></div>`).join('') || '<div class="empty-state">No time edit requests yet.</div>';
+  $('#myTimeEditRows').innerHTML = myEdits.map(request => `<div class="approval-row"><div><b>${escapeHtml(request.date)}</b><small>${escapeHtml(request.clockIn)}-${escapeHtml(request.clockOut)}</small><small>${escapeHtml(cleanTimeEditReason(request.reason) || 'No note provided')}</small></div><span class="access-state ${request.status === 'pending' ? 'pending' : ''}">${request.status}</span></div>`).join('') || '<div class="empty-state">No time edit requests yet.</div>';
   $('#myOvertimeRows').innerHTML = myOvertime.map(request => `<div class="approval-row"><div><b>${escapeHtml(request.date)}</b><small>${Number(request.hours).toFixed(2)} OT hours</small><small>${escapeHtml(request.reason)}</small></div><span class="access-state ${request.status === 'pending' ? 'pending' : ''}">${request.status}</span></div>`).join('') || '<div class="empty-state">No overtime requests yet.</div>';
   renderLeaveCalendar();
+}
+
+function auditLogRecords() {
+  const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const rows = [];
+  const timeEntries = [...supabaseTimeEntries, ...supabaseDeletedTimeEntries];
+  timeEntries.forEach((entry, index) => {
+    const person = attendanceRecordFromSupabase(entry, index);
+    const activity = parseLiveActivity(entry.task);
+    const clockInAt = entry.clock_in ? new Date(entry.clock_in) : null;
+    const clockOutAt = entry.clock_out ? new Date(entry.clock_out) : null;
+    if (clockInAt && clockInAt.getTime() >= since) {
+      rows.push({
+        at: clockInAt,
+        employee: person.name,
+        activity: 'Clock in',
+        details: activity.task || 'Tracked time',
+        status: entry.status === 'working' || !entry.clock_out ? 'Working' : entry.status || 'completed'
+      });
+    }
+    if (clockOutAt && clockOutAt.getTime() >= since) {
+      rows.push({
+        at: clockOutAt,
+        employee: person.name,
+        activity: entry.status === 'deleted' ? 'Deleted time entry' : 'Clock out',
+        details: `${person.clockIn}-${person.clockOut} · ${person.worked}`,
+        status: entry.status || 'completed'
+      });
+    }
+  });
+  timeEditRequests.forEach(request => {
+    const created = new Date(request.createdAt || request.date || Date.now());
+    if (!Number.isFinite(created.getTime()) || created.getTime() < since) return;
+    rows.push({
+      at: created,
+      employee: request.employeeName,
+      activity: isAddTimeEditRequest(request) ? 'Added time request' : timeEditSourceEntryId(request.reason) ? 'Time correction request' : 'Time edit request',
+      details: `${request.date} · ${request.clockIn}-${request.clockOut}${cleanTimeEditReason(request.reason) ? ` · ${cleanTimeEditReason(request.reason)}` : ''}`,
+      status: request.status || 'pending'
+    });
+  });
+  return rows.sort((a, b) => b.at - a.at);
+}
+
+function renderAuditLog() {
+  const rowsTarget = $('#auditRows');
+  if (!rowsTarget) return;
+  const rows = auditLogRecords();
+  rowsTarget.innerHTML = rows.map(row => `<div class="audit-row"><span class="audit-time">${businessDateTimeLabel(row.at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><span><b>${escapeHtml(row.employee)}</b></span><span>${escapeHtml(row.activity)}</span><span>${escapeHtml(row.details)}</span><span class="access-state ${row.status === 'pending' ? 'pending' : ''}">${escapeHtml(row.status)}</span></div>`).join('') || '<div class="empty-state">No audit activity in the last 30 days.</div>';
+  $('#auditCount').textContent = `${rows.length} audit record${rows.length === 1 ? '' : 's'}`;
 }
 
 function renderDocuments() {
@@ -3996,10 +4118,23 @@ function closeLeaveForm() {
   $('#leaveModalBackdrop').hidden = true;
 }
 
-function openTimeEditForm(date = '') {
+function openTimeEditForm(date = '', options = {}) {
   $('#timeEditForm').reset();
   $('#timeEditFormError').hidden = true;
-  $('#timeEditDate').value = date || isoDate(todayDate);
+  const mode = options.mode || 'correction';
+  $('#timeEditForm').dataset.mode = mode;
+  $('#timeEditForm').dataset.timeEntryId = options.timeEntryId || '';
+  $('#timeEditForm h2').textContent = mode === 'edit' ? 'Edit this time entry' : mode === 'add' ? 'Add missed time' : 'Request correction';
+  $('#timeEditReason').placeholder = mode === 'add' ? 'Example: power interruption, missed clock-in, app issue' : 'Explain the correction';
+  if (options.start && options.end) {
+    const start = new Date(Number(options.start));
+    const end = new Date(Number(options.end));
+    $('#timeEditDate').value = isoDate(start);
+    $('#timeEditIn').value = businessTimeInput(start);
+    $('#timeEditOut').value = businessTimeInput(end);
+  } else {
+    $('#timeEditDate').value = date || isoDate(todayDate);
+  }
   $('#timeEditModalBackdrop').hidden = false;
 }
 
@@ -4035,7 +4170,7 @@ function cardKeyAction(event, callback) {
 
 function showPage() {
   const page = (location.hash || '#today').slice(1);
-  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'team', 'approvals', 'ai-alerts'];
+  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'team', 'approvals', 'ai-alerts', 'audit'];
   const employeeAllowed = ['today', 'hours', 'calendar', 'documents', 'requests'];
   const allowed = currentAccount?.role === 'employee' ? employeeAllowed : adminAllowed;
   const active = allowed.includes(page) ? page : 'today';
@@ -4048,6 +4183,7 @@ function showPage() {
   if (active === 'team') renderTeamDirectory();
   if (active === 'approvals') renderApprovals();
   if (active === 'ai-alerts') renderAiAlerts();
+  if (active === 'audit') renderAuditLog();
   if (active === 'hours') renderEmployeeHoursReport();
   if (active === 'calendar') renderLeaveCalendar();
   if (active === 'documents') renderDocuments();
@@ -4119,7 +4255,7 @@ async function clockOutActiveSession(message = 'Clocked out. Nice work.') {
   const end = Date.now();
   await completeSupabaseTimeEntry(end);
   await loadSupabaseTimeEntries();
-  state.entries.unshift({ task: running.task, seconds: secondsBetween(running.start, end), start: running.start, end });
+  state.entries.unshift({ task: running.task, seconds: secondsBetween(running.start, end), start: running.start, end, timeEntryId: running.timeEntryId || null });
   state.clockOut = end;
   state.running = null;
   longSessionDeadline = null;
@@ -4140,7 +4276,7 @@ function reconcileAdminClockOut() {
   if (!remoteEntry || remoteEntry.status === 'working' || !remoteEntry.clock_out) return;
   const running = state.running;
   const end = new Date(remoteEntry.clock_out).getTime();
-  state.entries.unshift({ task: running.task, seconds: secondsBetween(running.start, end), start: running.start, end });
+  state.entries.unshift({ task: running.task, seconds: secondsBetween(running.start, end), start: running.start, end, timeEntryId: running.timeEntryId || remoteEntry.id || null });
   state.clockOut = end;
   state.running = null;
   longSessionDeadline = null;
@@ -4154,17 +4290,39 @@ function reconcileAdminClockOut() {
 
 async function adminClockOutEmployee(button) {
   if (currentAccount?.role !== 'admin') return;
-  const employeeId = button.dataset.adminClockout;
+  let employeeId = button.dataset.adminClockout;
   const email = decodeURIComponent(button.dataset.clockoutEmail || '');
   const name = decodeURIComponent(button.dataset.clockoutName || 'Employee');
   if (!confirm(`Clock out ${name} now? Their active time entry will end immediately.`)) return;
   button.disabled = true;
   const end = new Date().toISOString();
   if (usesSupabase()) {
-    const timeUpdate = await supabaseClient.from('time_entries').update({ clock_out: end, status: 'completed' }).eq('employee_id', employeeId).eq('status', 'working').select('id');
+    if (!employeeId && email) {
+      employeeId = supabaseProfiles.find(profile => profile.email?.toLowerCase() === email.toLowerCase())?.id || '';
+    }
+    if (!employeeId) {
+      button.disabled = false;
+      return showToast(`Clock-out error: ${name} does not have a synced employee profile.`);
+    }
+    const timeUpdate = await supabaseClient
+      .from('time_entries')
+      .update({ clock_out: end, status: 'completed' })
+      .eq('employee_id', employeeId)
+      .or('status.eq.working,clock_out.is.null')
+      .select('id');
     if (timeUpdate.error) {
       button.disabled = false;
       showToast(`Clock-out error: ${timeUpdate.error.message}`);
+      return;
+    }
+    if (!(timeUpdate.data || []).length) {
+      button.disabled = false;
+      showToast(`${name} has no active clock-in to close.`);
+      await loadSupabaseTimeEntries();
+      await loadSupabaseLivePresence();
+      renderTeamDirectory();
+      renderAttendance();
+      renderScheduleWatch();
       return;
     }
     for (const entry of timeUpdate.data || []) await requestAiOvertimeReview(entry.id);
@@ -4176,7 +4334,7 @@ async function adminClockOutEmployee(button) {
         type: 'admin_clock_out',
         title: 'Clocked out by admin',
         message: `Your active work session was clocked out by HR Admin at ${formatClock(end)}.`,
-        is_read: false
+        meta: { clockedOutAt: end, clockedOutBy: currentProfile?.id || null }
       });
     }
     await loadSupabaseTimeEntries();
@@ -4191,6 +4349,7 @@ async function adminClockOutEmployee(button) {
   renderScheduleWatch();
   renderReports();
   renderAiAlerts();
+  renderAuditLog();
   showToast(`${name} was clocked out.`);
 }
 
@@ -4251,24 +4410,31 @@ function checkLongSession() {
 
 $('#toggleTimer').onclick = async () => {
   if (currentAccount?.role !== 'employee') return;
-  if (state.running) {
-    await clockOutActiveSession();
-    if ($('#taskNoteInput')) $('#taskNoteInput').value = '';
-    return;
-  } else {
-    const task = $('#taskInput').value || 'Untitled task';
-    const note = $('#taskNoteInput').value.trim();
-    const start = Date.now();
-    const timeEntry = await createSupabaseTimeEntry(task, start);
-    if (usesSupabase() && !timeEntry) return;
-    await loadSupabaseTimeEntries();
-    const runningStart = timeEntry?.start || start;
-    const runningTask = timeEntry?.task || task;
-    state.running = { task: runningTask, note, start: runningStart, timeEntryId: timeEntry?.id || null, nextLongSessionCheckAt: runningStart + LONG_SESSION_SECONDS * 1000 };
-    state.clockIn = state.clockIn || runningStart;
-    state.clockOut = null;
-    syncOwnLivePresence();
-    showToast(timeEntry?.resumed ? 'Existing active shift resumed. You are clocked in.' : 'Clocked in.');
+  const button = $('#toggleTimer');
+  button.disabled = true;
+  try {
+    await refreshOwnActiveSessionFromSupabase();
+    if (state.running) {
+      await clockOutActiveSession();
+      if ($('#taskNoteInput')) $('#taskNoteInput').value = '';
+      return;
+    } else {
+      const task = $('#taskInput').value || 'Untitled task';
+      const note = $('#taskNoteInput').value.trim();
+      const start = Date.now();
+      const timeEntry = await createSupabaseTimeEntry(task, start);
+      if (usesSupabase() && !timeEntry) return;
+      await loadSupabaseTimeEntries();
+      const runningStart = timeEntry?.start || start;
+      const runningTask = timeEntry?.task || task;
+      state.running = { task: runningTask, note, start: runningStart, timeEntryId: timeEntry?.id || null, nextLongSessionCheckAt: runningStart + LONG_SESSION_SECONDS * 1000 };
+      state.clockIn = state.clockIn || runningStart;
+      state.clockOut = null;
+      syncOwnLivePresence();
+      showToast(timeEntry?.resumed ? 'Existing active shift resumed. You are clocked in.' : 'Clocked in.');
+    }
+  } finally {
+    button.disabled = false;
   }
   if (interval) clearInterval(interval);
   if (state.running || state.lunch) interval = setInterval(render, 1000);
@@ -4308,7 +4474,7 @@ $('#lunchButton').onclick = () => {
 };
 
 $('#addTime').onclick = () => {
-  if (currentAccount?.role === 'employee') return showToast('Employees cannot manually edit time. Use My Requests instead.');
+  if (currentAccount?.role === 'employee') return openTimeEditForm(isoDate(todayDate), { mode: 'add' });
   $('#modalBackdrop').hidden = false;
 };
 
@@ -4454,13 +4620,31 @@ $('#leaveForm').onsubmit = async event => {
 
 $('#timeEditForm').onsubmit = async event => {
   event.preventDefault();
+  const form = $('#timeEditForm');
+  const mode = form.dataset.mode || 'correction';
+  const date = $('#timeEditDate').value;
+  const clockIn = $('#timeEditIn').value;
+  const clockOut = $('#timeEditOut').value;
+  const hours = timeEditHours(date, clockIn, clockOut);
+  let reason = $('#timeEditReason').value.trim();
+  if (!hours) {
+    $('#timeEditFormError').textContent = 'Clock-out must be after clock-in.';
+    $('#timeEditFormError').hidden = false;
+    return;
+  }
+  if (overtimeRoleName(currentEmployeeJobRole()) === 'Coach' && hours > 3) {
+    const proceed = confirm(`This coach time edit is ${hours.toFixed(2)} hours, which is more than the 3-hour coach limit. It will be sent to admin for approval before it is added to payroll. Continue?`);
+    if (!proceed) return;
+  }
+  if (mode === 'add') reason = `${TIME_EDIT_ADD_PREFIX}${reason}`;
+  if (mode === 'edit') reason = timeEditReasonWithSource(form.dataset.timeEntryId, reason);
   if (usesSupabase()) {
     const { error } = await supabaseClient.from('time_edit_requests').insert({
       employee_id: currentProfile.id,
-      requested_date: $('#timeEditDate').value,
-      requested_clock_in: $('#timeEditIn').value,
-      requested_clock_out: $('#timeEditOut').value,
-      reason: $('#timeEditReason').value.trim(),
+      requested_date: date,
+      requested_clock_in: clockIn,
+      requested_clock_out: clockOut,
+      reason,
       status: 'pending'
     });
     if (error) {
@@ -4470,7 +4654,7 @@ $('#timeEditForm').onsubmit = async event => {
     }
     await loadSupabaseRequests();
   } else {
-    timeEditRequests.push({ id: crypto.randomUUID(), employeeName: currentAccount.name, employeeEmail: currentAccount.email, date: $('#timeEditDate').value, clockIn: $('#timeEditIn').value, clockOut: $('#timeEditOut').value, reason: $('#timeEditReason').value.trim(), status: 'pending', createdAt: businessDateTimeLabel(new Date()) });
+    timeEditRequests.push({ id: crypto.randomUUID(), employeeName: currentAccount.name, employeeEmail: currentAccount.email, date, clockIn, clockOut, reason, status: 'pending', createdAt: businessDateTimeLabel(new Date()) });
     persistTimeEditRequests();
   }
   closeTimeEditForm();
@@ -4704,6 +4888,12 @@ $('#dateFilter').onchange = renderAttendance;
 $('#exportButton').onclick = () => showToast('Employees can view time here; exports are for admin reports.');
 $('#attendanceExport').onclick = () => exportCsv('sync2time-attendance-report.csv', ['Employee,Role,Date,Clock in,Clock out,Worked,Status', ...rosterSource().map(person => `"${person.name}","${person.role}","${person.date}","${person.clockIn}","${person.clockOut}","${person.worked}","${person.status === 'clocked' ? 'Clocked in' : 'Complete'}"`)].join('\n'), 'Attendance report exported as CSV.');
 $('#scheduleExport').onclick = () => exportCsv('sync2time-schedule-watch.csv', ['Employee,Role,Schedule,Clock in,Clock out,Rate,Earnings,Attendance note', ...rosterSource().map(person => `"${person.name}","${person.role}","${person.schedule}","${person.clockIn}","${person.clockOut}","${rateLabel(person)}","${money(employeeEarnings(person))}","${scheduleStatus(person).label}"`)].join('\n'), 'Schedule watch exported as CSV.');
+if ($('#auditExport')) $('#auditExport').onclick = () => {
+  const rows = auditLogRecords();
+  const cell = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const csv = ['Date/Time,Employee,Activity,Details,Status', ...rows.map(row => [businessDateTimeLabel(row.at), row.employee, row.activity, row.details, row.status].map(cell).join(','))].join('\n');
+  exportCsv('sync2time-audit-log.csv', csv, 'Audit log exported as CSV.');
+};
 $('#reportPeriod').onchange = () => {
   syncReportDatesFromPeriod();
   renderReports();
@@ -4912,6 +5102,7 @@ async function deleteEmployeeTimeEntry(button) {
   renderAttendance();
   renderReports();
   renderDeletedTimeAlerts();
+  renderAuditLog();
   showToast('Time entry deleted and employee notice created.');
 }
 
@@ -5013,6 +5204,17 @@ $('#activitySummary').onclick = showCheckedInSchedule;
 $('#activitySummary').onkeydown = event => cardKeyAction(event, showCheckedInSchedule);
 $('#clockSummary').onclick = () => $('#personalActivity').scrollIntoView({ behavior: 'smooth', block: 'start' });
 $('#clockSummary').onkeydown = event => cardKeyAction(event, () => $('#personalActivity').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+$('#entries').onclick = event => {
+  const button = event.target.closest('[data-entry-edit]');
+  if (!button || currentAccount?.role !== 'employee') return;
+  event.stopPropagation();
+  openTimeEditForm('', {
+    mode: button.dataset.entryId ? 'edit' : 'add',
+    timeEntryId: button.dataset.entryId || '',
+    start: button.dataset.entryStart,
+    end: button.dataset.entryEnd
+  });
+};
 $('#bars').onclick = event => {
   const bar = event.target.closest('[data-day]');
   if (bar) showToast(`${bar.dataset.day} activity selected.`);
