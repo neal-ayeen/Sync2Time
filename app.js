@@ -2441,7 +2441,8 @@ function renderEmployeePayrollAdjustments() {
     const adjustmentPhp = Number(item.adjustment_php ?? item.adjustmentPhp ?? 0);
     const deductionsPhp = Number(item.deductions_php ?? item.deductionsPhp ?? 0);
     const commissionPhp = Number(item.commission_php ?? item.commissionPhp ?? 0);
-    const details = `Current summary | Hour adjustment: ${signedHourLabel(hours)} | USD amount: ${money(amount)} | PHP adjustment: ${phpMoney(adjustmentPhp)} | Deductions: ${phpMoney(deductionsPhp)} | Commission: ${phpMoney(commissionPhp)}`;
+    const payableOverride = payableHoursOverrideValue(item);
+    const details = `Current summary | Hour adjustment: ${signedHourLabel(hours)}${payableOverride !== null ? ` | Approved payable: ${payableOverride.toFixed(2)}h` : ''} | USD amount: ${money(amount)} | PHP adjustment: ${phpMoney(adjustmentPhp)} | Deductions: ${phpMoney(deductionsPhp)} | Commission: ${phpMoney(commissionPhp)}`;
     return `<div class="payroll-adjustment-notice payroll-adjustment-summary-notice"><div><b>${escapeHtml(from)} to ${escapeHtml(to)}</b><small>${escapeHtml(details)}</small><small>${escapeHtml(item.note || 'No note provided')}</small></div><span class="access-state">Summary</span></div>`;
   }).join('');
   if (history.length) {
@@ -2577,13 +2578,15 @@ function renderReports() {
   });
   const rows = [...groups.values()].map(row => {
     const adjustment = adjustmentFor(row.employeeId, start, end);
-    const deductedHours = Number(adjustment?.deducted_hours ?? adjustment?.deductedHours ?? 0);
+    const actualHours = row.seconds / 3600;
+    const payableOverride = payableHoursOverrideValue(adjustment);
+    const deductedHours = signedHoursFromAdjustment(adjustment, actualHours);
     const deductedAmount = Math.max(0, Number(adjustment?.deducted_amount ?? adjustment?.deductedAmount ?? 0));
     const commission = Math.max(0, Number(adjustment?.commission ?? 0));
     const rate = hourlyRate(row) || 0;
-    const payableSeconds = Math.max(0, row.seconds - deductedHours * 3600);
+    const payableSeconds = payableOverride !== null ? Math.max(0, payableOverride * 3600) : Math.max(0, row.seconds - deductedHours * 3600);
     const netPay = Math.max(0, row.pay - deductedHours * rate - deductedAmount + commission);
-    return { ...row, adjustment, deductedHours, deductedAmount, commission, payableSeconds, netPay };
+    return { ...row, adjustment, payableOverride, deductedHours, deductedAmount, commission, payableSeconds, netPay };
   });
   currentReportRows = rows;
   $('#reportTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
@@ -2754,6 +2757,23 @@ function signedHourShort(hours = 0) {
   return `${value > 0 ? '-' : '+'}${Math.abs(value).toFixed(2)}h`;
 }
 
+function payableHoursOverrideValue(adjustment) {
+  const raw = adjustment?.payable_hours_override ?? adjustment?.payableHoursOverride;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function signedHoursFromAdjustment(adjustment, actualHours) {
+  const payableOverride = payableHoursOverrideValue(adjustment);
+  if (payableOverride !== null) return Number(actualHours || 0) - payableOverride;
+  return Number(adjustment?.deducted_hours ?? adjustment?.deductedHours ?? 0);
+}
+
+function dbDeductedHours(hours) {
+  return Math.max(0, Number(hours || 0));
+}
+
 function signedPhpMoney(value = 0) {
   const amount = Number(value || 0);
   if (Math.abs(amount) <= 0.004) return phpMoney(0);
@@ -2796,6 +2816,7 @@ function payrollAdjustmentValues(person, start, end) {
   return {
     record: adjustment,
     deductedHours: Number(adjustment?.deducted_hours ?? adjustment?.deductedHours ?? 0),
+    payableHoursOverride: payableHoursOverrideValue(adjustment),
     deductedAmount: Math.max(0, Number(adjustment?.deducted_amount ?? adjustment?.deductedAmount ?? 0)),
     adjustment: Number(adjustment?.adjustment_php ?? adjustment?.adjustmentPhp ?? 0),
     deductions: Number(adjustment?.deductions_php ?? adjustment?.deductionsPhp ?? 0),
@@ -2839,10 +2860,13 @@ function buildPayrollRows() {
     const dailyRate = monthlyPhp / Math.max(1, weekdayCount(monthStart, monthEnd));
     const otPay = otHours * (dailyRate / 8) * 1.25;
     const hourlyDeductionRatePhp = monthlyPhp ? dailyRate / 8 : hourlyUsd * fx;
-    const hourDeductionPhp = values.deductedHours * hourlyDeductionRatePhp;
+    const hourAdjustment = values.payableHoursOverride !== null
+      ? payrollBaseHours - values.payableHoursOverride
+      : values.deductedHours;
+    const hourDeductionPhp = hourAdjustment * hourlyDeductionRatePhp;
     const amountDeductionPhp = selectedPayrollRole === 'coaches' || (!monthlyPhp && hourlyUsd) ? values.deductedAmount * fx : values.deductedAmount;
     const quickDeductionPhp = hourDeductionPhp + amountDeductionPhp;
-    const payableHours = Math.max(0, payrollBaseHours - values.deductedHours);
+    const payableHours = values.payableHoursOverride !== null ? Math.max(0, values.payableHoursOverride) : Math.max(0, payrollBaseHours - hourAdjustment);
     const statutory = selectedPayrollRole === 'admin' ? statutoryAdminDeductions(person) : { sss: 0, philHealth: 0, pagibig: 0, total: 0 };
     let grossUsd = 0;
     let grossPhp = 0;
@@ -2860,7 +2884,7 @@ function buildPayrollRows() {
       ? grossPhp + values.adjustment - quickDeductionPhp
       : grossPhp + values.deductions + values.commission - quickDeductionPhp - statutory.total;
     const netPay = Math.max(0, calculatedNetPay);
-    return { person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total, ...values };
+    return { ...values, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total };
   });
 }
 
@@ -3432,7 +3456,8 @@ function openPayrollAdjustment(employeeId) {
   const { start, end } = reportRange();
   editingPayrollAdjustment = { employeeId, start: isoDate(start), end: isoDate(end), row };
   const adjustment = adjustmentFor(employeeId, start, end);
-  const savedHours = Number(adjustment?.deducted_hours ?? adjustment?.deductedHours ?? 0);
+  const actualHours = Math.max(0, Number(row.seconds || 0) / 3600);
+  const savedHours = signedHoursFromAdjustment(adjustment, actualHours);
   $('#payrollAdjustmentEmployee').textContent = row.name;
   $('#payrollAdjustmentPeriod').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${formatDuration(row.seconds)} worked`;
   if ($('#deductHoursMode')) $('#deductHoursMode').value = savedHours < 0 ? 'add' : 'deduct';
@@ -3453,8 +3478,8 @@ async function savePayrollAdjustment(event) {
   const commission = Math.max(0, Number($('#commissionAmount').value) || 0);
   const note = $('#adjustmentNote').value.trim();
   const previousAdjustment = adjustmentFor(editingPayrollAdjustment.employeeId, businessDateFromKey(editingPayrollAdjustment.start), businessDateFromKey(editingPayrollAdjustment.end));
-  const previousDeductedHours = Number(previousAdjustment?.deducted_hours ?? previousAdjustment?.deductedHours ?? 0);
   const actualHours = Math.max(0, Number(editingPayrollAdjustment.row?.seconds || 0) / 3600);
+  const previousDeductedHours = signedHoursFromAdjustment(previousAdjustment, actualHours);
   const previousPayableHours = Math.max(0, actualHours - previousDeductedHours);
   const newPayableHours = Math.max(0, actualHours - deductedHours);
   const deductedHoursDelta = deductedHours - previousDeductedHours;
@@ -3467,7 +3492,8 @@ async function savePayrollAdjustment(event) {
     employee_id: editingPayrollAdjustment.employeeId,
     period_start: editingPayrollAdjustment.start,
     period_end: editingPayrollAdjustment.end,
-    deducted_hours: deductedHours,
+    deducted_hours: dbDeductedHours(deductedHours),
+    payable_hours_override: newPayableHours,
     deducted_amount: deductedAmount,
     commission,
     note,
@@ -3480,7 +3506,8 @@ async function savePayrollAdjustment(event) {
   if (usesSupabase()) {
     const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
     if (error) {
-      $('#payrollAdjustmentError').textContent = `Could not save: ${error.message}. Run the payroll adjustments SQL in Supabase first.`;
+      const sqlHint = /payable_hours_override|column/i.test(error.message || '') ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.' : ' Run the payroll adjustments SQL in Supabase first.';
+      $('#payrollAdjustmentError').textContent = `Could not save: ${error.message}.${sqlHint}`;
       $('#payrollAdjustmentError').hidden = false;
       return;
     }
@@ -3489,7 +3516,7 @@ async function savePayrollAdjustment(event) {
     payrollAdjustments.push(data);
   } else {
     payrollAdjustments = payrollAdjustments.filter(item => !((item.employeeId === record.employee_id) && item.periodStart === record.period_start && item.periodEnd === record.period_end));
-    payrollAdjustments.push({ id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, deductedHours, deductedAmount, commission, note, updatedAt: record.updated_at });
+    payrollAdjustments.push({ id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, deductedHours: record.deducted_hours, payableHoursOverride: record.payable_hours_override, deductedAmount, commission, note, updatedAt: record.updated_at });
     persistPayrollAdjustments();
   }
   if (Math.abs(deductedHoursDelta) > 0.004 || note) {
@@ -3567,7 +3594,7 @@ function enhanceQuickHoursEditor() {
   const actualLabel = actualInput.closest('label');
   const payableLabel = payableInput.closest('label');
   const deductLabel = deductInput.closest('label');
-  if (payableLabel?.firstChild) payableLabel.firstChild.textContent = 'New payable hours';
+  if (payableLabel?.firstChild) payableLabel.firstChild.textContent = 'Approved payable hours';
   if (deductLabel?.firstChild) deductLabel.firstChild.textContent = 'Total hour adjustment after save';
   deductInput.removeAttribute('min');
   deductInput.placeholder = '-1.00 adds time, 1.00 deducts';
@@ -3908,7 +3935,8 @@ async function saveQuickHoursAdjustment(event) {
     employee_id: row.person.id,
     period_start: isoDate(start),
     period_end: isoDate(end),
-    deducted_hours: deductedHours,
+    deducted_hours: dbDeductedHours(deductedHours),
+    payable_hours_override: newPayableHours,
     deducted_amount: Number(existing.deducted_amount ?? existing.deductedAmount ?? 0),
     commission: Number(existing.commission ?? 0),
     adjustment_php: Number(existing.adjustment_php ?? existing.adjustmentPhp ?? row.adjustment ?? 0),
@@ -3926,7 +3954,8 @@ async function saveQuickHoursAdjustment(event) {
   if (usesSupabase()) {
     const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
     if (error) {
-      $('#quickHoursError').textContent = `Could not save quick hours: ${error.message}`;
+      const sqlHint = /payable_hours_override|column/i.test(error.message || '') ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.' : '';
+      $('#quickHoursError').textContent = `Could not save quick hours: ${error.message}.${sqlHint}`;
       $('#quickHoursError').hidden = false;
       return;
     }
@@ -3935,7 +3964,7 @@ async function saveQuickHoursAdjustment(event) {
     payrollAdjustments.push(data);
   } else {
     payrollAdjustments = payrollAdjustments.filter(item => !((item.employeeId || item.employee_id) === record.employee_id && (item.periodStart || item.period_start) === record.period_start && (item.periodEnd || item.period_end) === record.period_end));
-    payrollAdjustments.push({ ...record, id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, deductedHours });
+    payrollAdjustments.push({ ...record, id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, deductedHours: record.deducted_hours, payableHoursOverride: record.payable_hours_override });
     persistPayrollAdjustments();
   }
   let historyResult = { ok: true };
@@ -4029,6 +4058,7 @@ async function savePayrollRow(event) {
     period_start: isoDate(start),
     period_end: isoDate(end),
     deducted_hours: Number(existing.deducted_hours ?? existing.deductedHours ?? 0),
+    payable_hours_override: existing.payable_hours_override ?? existing.payableHoursOverride ?? null,
     deducted_amount: Number(existing.deducted_amount ?? existing.deductedAmount ?? 0),
     commission: Number(existing.commission ?? 0),
     adjustment_php: Number($('#payrollRowAdjustment').value) || 0,
@@ -4052,7 +4082,8 @@ async function savePayrollRow(event) {
   if (usesSupabase()) {
     const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
     if (error) {
-      $('#payrollRowError').textContent = `Could not save: ${error.message}`;
+      const sqlHint = /payable_hours_override|column/i.test(error.message || '') ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.' : '';
+      $('#payrollRowError').textContent = `Could not save: ${error.message}.${sqlHint}`;
       $('#payrollRowError').hidden = false;
       return;
     }
