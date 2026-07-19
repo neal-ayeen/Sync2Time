@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260719-payable-override-1" />
+  <link rel="stylesheet" href="styles.css?v=20260720-cutoff-usd-rate-1" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -166,7 +166,8 @@
         <label class="filter-label">CUTOFF <select id="payrollCutoff"><option value="current">Current cutoff</option><option value="previous">Previous cutoff</option></select></label>
         <label class="filter-label">FROM <input id="payrollStart" type="date" readonly></label>
         <label class="filter-label">TO <input id="payrollEnd" type="date" readonly></label>
-        <label class="filter-label fx-edit">USD TO PHP RATE <input id="payrollFxRate" type="number" min="1" step="0.0001"></label>
+        <label class="filter-label fx-edit">USD TO PHP RATE <input id="payrollFxRate" type="number" min="0.0001" step="0.0001"></label>
+        <button class="secondary" id="savePayrollFx" type="button">Save rate</button>
         <button class="secondary" id="resetPayrollFx" type="button">Use live rate</button>
         <a class="secondary google-rate-link" href="https://www.google.com/finance/quote/USD-PHP" target="_blank" rel="noopener">Check Google rate</a>
         <span class="fx-source" id="payrollFxSource">Loading exchange rate…</span>
@@ -309,6 +310,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260719-payable-override-1"></script>
+  <script src="app.js?v=20260720-cutoff-usd-rate-1"></script>
 </body>
 </html>

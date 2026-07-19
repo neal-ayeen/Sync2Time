@@ -153,6 +153,7 @@ let fxRateDate = localStorage.getItem('minute-php-usd-date') || 'offline referen
 let liveUsdPhpRate = Number(localStorage.getItem('sync2time-live-usd-php')) || null;
 let liveUsdPhpDate = localStorage.getItem('sync2time-live-usd-php-date') || '';
 let manualPayrollFxOverride = Number(localStorage.getItem('sync2time-payroll-usd-php')) || null;
+let payrollFxOverrides = JSON.parse(localStorage.getItem('sync2time-payroll-usd-php-overrides') || '{}');
 const liveCalculatorOpenedAt = Date.now();
 const LIVE_PRESENCE_KEY = 'sync2time-live-presence';
 const LIVE_ACTIVITY_PREFIX = '__sync2time__';
@@ -1019,6 +1020,11 @@ async function loadSupabaseSettings() {
   manualPayrollFxOverride = manualRate > 0 ? manualRate : null;
   if (manualPayrollFxOverride) localStorage.setItem('sync2time-payroll-usd-php', String(manualPayrollFxOverride));
   else localStorage.removeItem('sync2time-payroll-usd-php');
+  const sharedFxOverrides = sharedSettings.payroll_usd_php_overrides?.rates;
+  if (sharedFxOverrides && typeof sharedFxOverrides === 'object' && !Array.isArray(sharedFxOverrides)) {
+    payrollFxOverrides = Object.fromEntries(Object.entries(sharedFxOverrides).filter(([, value]) => Number(value) > 0).map(([key, value]) => [key, Number(value)]));
+    localStorage.setItem('sync2time-payroll-usd-php-overrides', JSON.stringify(payrollFxOverrides));
+  }
   const sharedTemplates = sharedSettings.paystub_email_templates?.templates;
   if (Array.isArray(sharedTemplates) && sharedTemplates.length) {
     paystubEmailTemplates = normalizePaystubEmailTemplates(sharedTemplates);
@@ -2720,8 +2726,28 @@ function weekdayCount(start, end) {
   return count;
 }
 
+function payrollFxOverrideKey(start, end) {
+  return `${isoDate(start)}_${isoDate(end)}`;
+}
+
+function currentPayrollFxOverrideKey() {
+  const { start, end } = payrollRange();
+  return payrollFxOverrideKey(start, end);
+}
+
 function payrollUsdPhpRate() {
-  return manualPayrollFxOverride > 0 ? manualPayrollFxOverride : (liveUsdPhpRate || 1 / phpUsdRate);
+  const cutoffRate = Number(payrollFxOverrides[currentPayrollFxOverrideKey()]);
+  return cutoffRate > 0 ? cutoffRate : (manualPayrollFxOverride > 0 ? manualPayrollFxOverride : (liveUsdPhpRate || 1 / phpUsdRate));
+}
+
+function persistPayrollFxOverrides() {
+  localStorage.setItem('sync2time-payroll-usd-php-overrides', JSON.stringify(payrollFxOverrides));
+}
+
+async function savePayrollFxOverridesSetting() {
+  if (!usesSupabase()) return;
+  await saveSupabaseSetting('payroll_usd_php_overrides', { rates: payrollFxOverrides, updatedAt: new Date().toISOString() });
+  await saveSupabaseSetting('payroll_usd_php_override', { rate: null, updatedAt: new Date().toISOString() });
 }
 
 async function refreshPayrollUsdPhpRate() {
@@ -2937,9 +2963,12 @@ function renderPayroll() {
   $('#payrollStart').value = isoDate(start);
   $('#payrollEnd').value = isoDate(end);
   $('#payrollFxRate').value = fx.toFixed(4);
-  const manual = manualPayrollFxOverride > 0;
-  $('#payrollFxSource').innerHTML = manual
-    ? 'Manual payroll rate · <a href="https://www.google.com/finance/quote/USD-PHP" target="_blank" rel="noopener">compare with Google</a>'
+  const cutoffRate = Number(payrollFxOverrides[payrollFxOverrideKey(start, end)]);
+  const manual = cutoffRate > 0 || manualPayrollFxOverride > 0;
+  $('#payrollFxSource').innerHTML = cutoffRate > 0
+    ? `Manual rate saved for this cutoff · <a href="https://www.google.com/finance/quote/USD-PHP" target="_blank" rel="noopener">compare with Google</a>`
+    : manualPayrollFxOverride > 0
+      ? 'Legacy manual payroll rate · save this cutoff to lock its own rate · <a href="https://www.google.com/finance/quote/USD-PHP" target="_blank" rel="noopener">compare with Google</a>'
     : `Daily market rate ${escapeHtml(liveUsdPhpDate || fxRateDate)} · <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">Rates by Exchange Rate API</a>`;
   $$('#payrollTabs [data-payroll-role]').forEach(button => button.classList.toggle('active', button.dataset.payrollRole === selectedPayrollRole));
   const headers = {
@@ -5180,44 +5209,63 @@ $('#payrollTabs').onclick = event => {
   renderPayroll();
 };
 $('#payrollCutoff').onchange = renderPayroll;
-$('#payrollFxRate').onchange = async () => {
+async function savePayrollFxOverride() {
   const rate = Number($('#payrollFxRate').value);
   if (!(rate > 0)) return showToast('Enter a valid USD to PHP rate.');
-  const previous = manualPayrollFxOverride;
-  manualPayrollFxOverride = rate;
-  localStorage.setItem('sync2time-payroll-usd-php', String(rate));
+  const { start, end } = payrollRange();
+  const key = payrollFxOverrideKey(start, end);
+  const previousOverrides = { ...payrollFxOverrides };
+  const previousLegacy = manualPayrollFxOverride;
+  payrollFxOverrides[key] = rate;
+  manualPayrollFxOverride = null;
+  persistPayrollFxOverrides();
+  localStorage.removeItem('sync2time-payroll-usd-php');
   if (usesSupabase()) {
     try {
-      await saveSupabaseSetting('payroll_usd_php_override', { rate, updatedAt: new Date().toISOString() });
+      await savePayrollFxOverridesSetting();
     } catch (error) {
-      manualPayrollFxOverride = previous;
-      if (previous > 0) localStorage.setItem('sync2time-payroll-usd-php', String(previous));
-      else localStorage.removeItem('sync2time-payroll-usd-php');
+      payrollFxOverrides = previousOverrides;
+      manualPayrollFxOverride = previousLegacy;
+      persistPayrollFxOverrides();
+      if (previousLegacy > 0) localStorage.setItem('sync2time-payroll-usd-php', String(previousLegacy));
       showToast(`Payroll rate sync error: ${error.message}`);
       renderPayroll();
       return;
     }
   }
   renderPayroll();
-};
-$('#resetPayrollFx').onclick = async () => {
-  const previous = manualPayrollFxOverride;
+  showToast(`USD to PHP rate saved for ${businessDateLabel(start)} to ${businessDateLabel(end)}.`);
+}
+
+async function resetPayrollFxOverride() {
+  const { start, end } = payrollRange();
+  const key = payrollFxOverrideKey(start, end);
+  const previousOverrides = { ...payrollFxOverrides };
+  const previousLegacy = manualPayrollFxOverride;
+  delete payrollFxOverrides[key];
   manualPayrollFxOverride = null;
+  persistPayrollFxOverrides();
   localStorage.removeItem('sync2time-payroll-usd-php');
   if (usesSupabase()) {
     try {
-      await saveSupabaseSetting('payroll_usd_php_override', { rate: null, updatedAt: new Date().toISOString() });
+      await savePayrollFxOverridesSetting();
     } catch (error) {
-      manualPayrollFxOverride = previous;
-      if (previous > 0) localStorage.setItem('sync2time-payroll-usd-php', String(previous));
+      payrollFxOverrides = previousOverrides;
+      manualPayrollFxOverride = previousLegacy;
+      persistPayrollFxOverrides();
+      if (previousLegacy > 0) localStorage.setItem('sync2time-payroll-usd-php', String(previousLegacy));
       showToast(`Payroll rate sync error: ${error.message}`);
       renderPayroll();
       return;
     }
   }
   refreshPayrollUsdPhpRate();
-  showToast('Live/reference USD to PHP rate restored.');
-};
+  showToast(`Live/reference USD to PHP rate restored for ${businessDateLabel(start)} to ${businessDateLabel(end)}.`);
+}
+
+$('#payrollFxRate').onchange = savePayrollFxOverride;
+if ($('#savePayrollFx')) $('#savePayrollFx').onclick = savePayrollFxOverride;
+$('#resetPayrollFx').onclick = resetPayrollFxOverride;
 $('#payrollExport').onclick = () => {
   const { start, end } = payrollRange();
   let header;
