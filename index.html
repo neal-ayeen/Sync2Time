@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260719-admin-clockout-edit-audit-1" />
+  <link rel="stylesheet" href="styles.css?v=20260719-whole-time-edit-1" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -36,7 +36,7 @@
       <a class="nav-item admin-only" href="#team"><span>♧</span> Team</a>
       <a class="nav-item admin-only" href="#approvals"><span>✓</span> Approvals</a>
       <a class="nav-item admin-only" href="#ai-alerts"><span>AI</span> AI Alerts</a>
-      <a class="nav-item admin-only" href="#audit"><span>LOG</span> Audit Log</a>
+      <a class="nav-item admin-only" href="#audit"><span>☷</span> Audit Log</a>
       <a class="nav-item employee-only" href="#calendar"><span>◫</span> Leave Calendar</a>
       <a class="nav-item employee-only" href="#documents"><span>⇧</span> Coaching Docs</a>
       <a class="nav-item employee-only" href="#requests"><span>✎</span> My Requests</a>
@@ -68,7 +68,7 @@
           <div class="task-row"><span class="project-dot coral"></span><select id="taskInput" aria-label="Current work category"></select></div>
           <input id="taskNoteInput" class="task-note-input" placeholder="Add notes for admin visibility (optional)" />
         </div>
-        <div class="timer-controls"><button class="secondary" id="addTime" type="button">+ Add time</button><button class="secondary employee-action" id="lunchButton" type="button">Start lunch</button><button class="start-btn" id="toggleTimer" type="button"><span id="playIcon">▶</span><span id="timerButtonText">Clock in</span></button></div>
+        <div class="timer-controls"><button class="secondary" id="addTime" type="button">Edit time</button><button class="secondary employee-action" id="lunchButton" type="button">Start lunch</button><button class="start-btn" id="toggleTimer" type="button"><span id="playIcon">▶</span><span id="timerButtonText">Clock in</span></button></div>
       </article>
 
       <article class="summary-card dashboard-clickable" id="activitySummary" tabindex="0" role="button" aria-label="View today's attendance summary">
@@ -309,6 +309,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260719-admin-clockout-edit-audit-1"></script>
+  <script src="app.js?v=20260719-whole-time-edit-1"></script>
 </body>
 </html>

@@ -1135,6 +1135,59 @@ async function applyApprovedTimeEdit(request, silent = false) {
   return { ok: true };
 }
 
+async function applyCoachSelfTimeEdit({ sourceEntryId, date, clockIn, clockOut, reason }) {
+  if (!usesSupabase() || currentAccount?.role !== 'employee' || !currentProfile?.id) {
+    return { ok: false, message: 'Supabase employee session is required.' };
+  }
+  const { start, end } = businessDateTimeRange(date, clockIn, clockOut);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) {
+    return { ok: false, message: 'Clock-out must be after clock-in.' };
+  }
+  const totalHours = secondsBetween(start, end) / 3600;
+  const approvedEnd = totalHours > 3 ? new Date(start.getTime() + 3 * 60 * 60 * 1000) : end;
+  const existing = sourceEntryId ? supabaseTimeEntries.find(entry => entry.id === sourceEntryId) : null;
+  const task = existing?.task || state.running?.task || 'Employee corrected time';
+  const payload = {
+    employee_id: currentProfile.id,
+    task,
+    clock_in: start.toISOString(),
+    clock_out: approvedEnd.toISOString(),
+    status: 'completed'
+  };
+  const result = sourceEntryId
+    ? await supabaseClient.from('time_entries').update(payload).eq('id', sourceEntryId).eq('employee_id', currentProfile.id).select('id').single()
+    : await supabaseClient.from('time_entries').insert(payload).select('id').single();
+  if (result.error) return { ok: false, message: result.error.message };
+  if (result.data?.id) await requestAiOvertimeReview(result.data.id);
+  let pendingExtra = 0;
+  if (totalHours > 3) {
+    pendingExtra = totalHours - 3;
+    const request = await supabaseClient.from('time_edit_requests').insert({
+      employee_id: currentProfile.id,
+      requested_date: isoDate(approvedEnd),
+      requested_clock_in: businessTimeInput(approvedEnd),
+      requested_clock_out: businessTimeInput(end),
+      reason: `${TIME_EDIT_ADD_PREFIX}Extra coach time beyond 3 auto-approved hours${reason ? `: ${reason}` : ''}`,
+      status: 'pending'
+    });
+    if (request.error) return { ok: false, message: `The first 3 hours were saved, but the extra-time approval request failed: ${request.error.message}` };
+  }
+  await supabaseClient.from('live_presence').delete().eq('employee_id', currentProfile.id);
+  await loadSupabaseTimeEntries();
+  await loadSupabaseLivePresence();
+  await loadSupabaseRequests();
+  hydrateEmployeeStateFromSupabase(currentAccount);
+  syncOwnLivePresence();
+  return {
+    ok: true,
+    totalHours,
+    pendingExtra,
+    message: pendingExtra > 0
+      ? `3 hours were auto-approved. ${pendingExtra.toFixed(2)} extra hour${pendingExtra === 1 ? '' : 's'} sent to admin approval.`
+      : `${totalHours.toFixed(2)} hour${totalHours === 1 ? '' : 's'} saved.`
+  };
+}
+
 async function repairApprovedTimeEdits() {
   if (!usesSupabase() || currentProfile?.role !== 'admin' || approvedTimeEditRepairAttempted) return;
   approvedTimeEditRepairAttempted = true;
@@ -1761,12 +1814,12 @@ function render() {
 
   const entries = $('#entries');
   const all = [
-    ...(running ? [{ task: running.task, seconds: runningSeconds, live: true, note: running.note || '' }] : []),
+    ...(running ? [{ task: running.task, seconds: runningSeconds, live: true, note: running.note || '', start: running.start, end: Date.now(), timeEntryId: running.timeEntryId || null }] : []),
     ...(state.lunch ? [{ task: 'Lunch break', seconds: secondsBetween(state.lunch.start, Date.now()), live: true, lunch: true }] : []),
     ...state.entries
   ];
   entries.innerHTML = all.map((entry, index) => {
-    const canEdit = currentAccount?.role === 'employee' && !entry.live && !entry.lunch && entry.start && entry.end;
+    const canEdit = currentAccount?.role === 'employee' && !entry.lunch && entry.start && (entry.end || entry.live);
     const editButton = canEdit ? `<button class="entry-edit-btn" data-entry-edit="${index}" data-entry-id="${entry.timeEntryId || ''}" data-entry-start="${entry.start}" data-entry-end="${entry.end}">Edit</button>` : '<span></span>';
     return `<div class="entry dashboard-clickable" tabindex="0" role="button" data-entry-index="${index}"><div class="entry-title"><span class="project-dot ${entry.lunch ? 'blue' : entry.live ? 'coral' : 'blue'}"></span><div>${escapeHtml(entry.task)}<small>${entry.note ? escapeHtml(entry.note) : entry.live ? 'Currently active' : 'Tracked time'}</small></div></div><span class="entry-time">${formatDuration(entry.seconds)}</span>${editButton}</div>`;
   }).join('');
@@ -4142,6 +4195,28 @@ function closeTimeEditForm() {
   $('#timeEditModalBackdrop').hidden = true;
 }
 
+function openWholeTimeEditor() {
+  if (currentAccount?.role !== 'employee') return;
+  if (state.running?.start) {
+    return openTimeEditForm('', {
+      mode: 'edit',
+      timeEntryId: state.running.timeEntryId || '',
+      start: state.running.start,
+      end: Date.now()
+    });
+  }
+  const latest = state.entries.find(entry => entry.start && entry.end && !entry.lunch);
+  if (latest) {
+    return openTimeEditForm('', {
+      mode: 'edit',
+      timeEntryId: latest.timeEntryId || '',
+      start: latest.start,
+      end: latest.end
+    });
+  }
+  openTimeEditForm(isoDate(todayDate), { mode: 'correction' });
+}
+
 function openOvertimeForm() {
   $('#overtimeForm').reset();
   $('#overtimeFormError').hidden = true;
@@ -4474,7 +4549,7 @@ $('#lunchButton').onclick = () => {
 };
 
 $('#addTime').onclick = () => {
-  if (currentAccount?.role === 'employee') return openTimeEditForm(isoDate(todayDate), { mode: 'add' });
+  if (currentAccount?.role === 'employee') return openWholeTimeEditor();
   $('#modalBackdrop').hidden = false;
 };
 
@@ -4630,6 +4705,32 @@ $('#timeEditForm').onsubmit = async event => {
   if (!hours) {
     $('#timeEditFormError').textContent = 'Clock-out must be after clock-in.';
     $('#timeEditFormError').hidden = false;
+    return;
+  }
+  const isCoachEdit = mode === 'edit' && overtimeRoleName(currentEmployeeJobRole()) === 'Coach';
+  if (isCoachEdit && usesSupabase()) {
+    if (hours > 3) {
+      const proceed = confirm(`This coach time edit is ${hours.toFixed(2)} hours. Sync2Time will auto-approve the first 3 hours and send the extra ${(hours - 3).toFixed(2)} hour${hours - 3 === 1 ? '' : 's'} to admin approval. Continue?`);
+      if (!proceed) return;
+    }
+    const result = await applyCoachSelfTimeEdit({
+      sourceEntryId: form.dataset.timeEntryId || '',
+      date,
+      clockIn,
+      clockOut,
+      reason
+    });
+    if (!result.ok) {
+      $('#timeEditFormError').textContent = result.message;
+      $('#timeEditFormError').hidden = false;
+      return;
+    }
+    closeTimeEditForm();
+    render();
+    renderApprovals();
+    renderEmployeeRequests();
+    renderAuditLog();
+    showToast(result.message);
     return;
   }
   if (overtimeRoleName(currentEmployeeJobRole()) === 'Coach' && hours > 3) {
