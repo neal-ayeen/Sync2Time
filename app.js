@@ -154,6 +154,7 @@ let liveUsdPhpRate = Number(localStorage.getItem('sync2time-live-usd-php')) || n
 let liveUsdPhpDate = localStorage.getItem('sync2time-live-usd-php-date') || '';
 let manualPayrollFxOverride = Number(localStorage.getItem('sync2time-payroll-usd-php')) || null;
 let payrollFxOverrides = JSON.parse(localStorage.getItem('sync2time-payroll-usd-php-overrides') || '{}');
+let settingsTableMissing = false;
 const liveCalculatorOpenedAt = Date.now();
 const LIVE_PRESENCE_KEY = 'sync2time-live-presence';
 const LIVE_ACTIVITY_PREFIX = '__sync2time__';
@@ -584,7 +585,15 @@ async function saveSupabaseSetting(settingKey, valueJson) {
     updated_by: currentProfile.id,
     updated_at: new Date().toISOString()
   }, { onConflict: 'setting_key' });
-  if (error) throw error;
+  if (error) {
+    if (isMissingAppSettingsError(error)) settingsTableMissing = true;
+    throw error;
+  }
+}
+
+function isMissingAppSettingsError(error) {
+  const message = String(error?.message || error || '');
+  return /app_settings|schema cache|could not find the table/i.test(message);
 }
 
 function stateKey(account = currentAccount) {
@@ -1009,9 +1018,14 @@ async function loadSupabaseSettings() {
     .from('app_settings')
     .select('setting_key, value_json');
   if (error) {
+    if (isMissingAppSettingsError(error)) {
+      settingsTableMissing = true;
+      return;
+    }
     showToast(`Settings sync error: ${error.message}`);
     return;
   }
+  settingsTableMissing = false;
   sharedSettings = {};
   (data || []).forEach(item => {
     sharedSettings[item.setting_key] = item.value_json || {};
@@ -2966,7 +2980,7 @@ function renderPayroll() {
   const cutoffRate = Number(payrollFxOverrides[payrollFxOverrideKey(start, end)]);
   const manual = cutoffRate > 0 || manualPayrollFxOverride > 0;
   $('#payrollFxSource').innerHTML = cutoffRate > 0
-    ? `Manual rate saved for this cutoff · <a href="https://www.google.com/finance/quote/USD-PHP" target="_blank" rel="noopener">compare with Google</a>`
+    ? `${settingsTableMissing ? 'Manual rate saved on this browser' : 'Manual rate saved for this cutoff'} · <a href="https://www.google.com/finance/quote/USD-PHP" target="_blank" rel="noopener">compare with Google</a>`
     : manualPayrollFxOverride > 0
       ? 'Legacy manual payroll rate · save this cutoff to lock its own rate · <a href="https://www.google.com/finance/quote/USD-PHP" target="_blank" rel="noopener">compare with Google</a>'
     : `Daily market rate ${escapeHtml(liveUsdPhpDate || fxRateDate)} · <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">Rates by Exchange Rate API</a>`;
@@ -5224,6 +5238,12 @@ async function savePayrollFxOverride() {
     try {
       await savePayrollFxOverridesSetting();
     } catch (error) {
+      if (isMissingAppSettingsError(error)) {
+        settingsTableMissing = true;
+        renderPayroll();
+        showToast(`USD to PHP rate saved on this browser for ${businessDateLabel(start)} to ${businessDateLabel(end)}. Run the app settings SQL to sync it for everyone.`);
+        return;
+      }
       payrollFxOverrides = previousOverrides;
       manualPayrollFxOverride = previousLegacy;
       persistPayrollFxOverrides();
@@ -5250,6 +5270,12 @@ async function resetPayrollFxOverride() {
     try {
       await savePayrollFxOverridesSetting();
     } catch (error) {
+      if (isMissingAppSettingsError(error)) {
+        settingsTableMissing = true;
+        renderPayroll();
+        showToast(`Live/reference rate restored on this browser for ${businessDateLabel(start)} to ${businessDateLabel(end)}. Run the app settings SQL to sync it for everyone.`);
+        return;
+      }
       payrollFxOverrides = previousOverrides;
       manualPayrollFxOverride = previousLegacy;
       persistPayrollFxOverrides();
