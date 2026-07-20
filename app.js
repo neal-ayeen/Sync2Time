@@ -2,7 +2,7 @@
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 const palette = ['#e6aab1', '#bad7ed', '#f2d18a', '#c8d9b6', '#d8c1e8', '#f2b7a6', '#b9e2dc', '#e3d29d'];
-const DEFAULT_TASK_OPTIONS = ['Coaching', 'Meeting', 'On Class', 'Admin', 'Webinar', 'SMM'];
+const DEFAULT_TASK_OPTIONS = ['Coaching', 'Meeting', 'On Class', 'Admin', 'Webinar', 'SMM', 'Bookkeeping'];
 let taskOptions = [...DEFAULT_TASK_OPTIONS];
 const BUSINESS_TIMEZONE = 'Asia/Manila';
 const BUSINESS_UTC_OFFSET = '+08:00';
@@ -133,6 +133,10 @@ let currentEmployeeReportRows = [];
 let selectedPayrollRole = 'coaches';
 const PAYROLL_ROLES = ['coaches', 'admin', 'webinar', 'smm', 'other'];
 const PAYROLL_ROLE_LABELS = { coaches: 'Coaches', admin: 'Admin', webinar: 'Webinar', smm: 'SMM', other: 'Other' };
+const MONTHLY_STATUTORY_CUTOFF_DAYS = { startDay: 1, endDay: 15, payDay: 20 };
+const STATUTORY_DEFAULTS_BY_EMPLOYEE = {
+  'meabel borreta': { sss: 625, philHealth: 250, pagibig: 200 }
+};
 let editingPayrollRow = null;
 let editingPayrollAdjustment = null;
 let editingQuickHoursRow = null;
@@ -205,6 +209,16 @@ function initials(name) {
 
 function slug(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+function nameKey(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
 function toClock(minutes) {
@@ -1012,6 +1026,9 @@ async function loadSupabaseProjects() {
     return;
   }
   taskOptions = (data || []).map(item => item.name).filter(Boolean);
+  DEFAULT_TASK_OPTIONS.forEach(option => {
+    if (!taskOptions.some(item => item.toLowerCase() === option.toLowerCase())) taskOptions.push(option);
+  });
   if (!taskOptions.length) taskOptions = [...DEFAULT_TASK_OPTIONS];
   if (selectedProject !== 'All' && !taskOptions.includes(selectedProject)) selectedProject = 'All';
 }
@@ -2836,7 +2853,18 @@ function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, number));
 }
 
-function statutoryAdminDeductions(person) {
+function nullableMoneyValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, number) : null;
+}
+
+function isMonthlyStatutoryCutoff(start, end) {
+  return Number(isoDate(start).slice(8, 10)) === MONTHLY_STATUTORY_CUTOFF_DAYS.startDay
+    && Number(isoDate(end).slice(8, 10)) === MONTHLY_STATUTORY_CUTOFF_DAYS.endDay;
+}
+
+function calculatedMonthlyStatutoryDeductions(person) {
   const monthlyPhp = Number(person?.rate || 0) >= 1000 ? Number(person.rate || 0) : 0;
   if (!monthlyPhp) {
     return { sss: 0, philHealth: 0, pagibig: 0, total: 0 };
@@ -2844,14 +2872,33 @@ function statutoryAdminDeductions(person) {
   const sssMonthly = Math.min(monthlyPhp, 35000) * 0.05;
   const philHealthMonthly = clampNumber(monthlyPhp, 10000, 100000) * 0.025;
   const pagibigMonthly = Math.min(monthlyPhp, 10000) * 0.02;
-  const sss = sssMonthly / 2;
-  const philHealth = philHealthMonthly / 2;
-  const pagibig = pagibigMonthly / 2;
+  const sss = sssMonthly;
+  const philHealth = philHealthMonthly;
+  const pagibig = pagibigMonthly;
   return {
     sss,
     philHealth,
     pagibig,
     total: sss + philHealth + pagibig
+  };
+}
+
+function statutoryAdminDeductions(person, values, start, end) {
+  const appliesThisCutoff = isMonthlyStatutoryCutoff(start, end);
+  const fallback = STATUTORY_DEFAULTS_BY_EMPLOYEE[nameKey(person?.name)] || calculatedMonthlyStatutoryDeductions(person);
+  if (!appliesThisCutoff) {
+    return { sss: 0, philHealth: 0, pagibig: 0, total: 0, appliesThisCutoff, fallback };
+  }
+  const sss = nullableMoneyValue(values?.statutorySssOverride) ?? fallback.sss;
+  const philHealth = nullableMoneyValue(values?.statutoryPhilHealthOverride) ?? fallback.philHealth;
+  const pagibig = nullableMoneyValue(values?.statutoryPagibigOverride) ?? fallback.pagibig;
+  return {
+    sss,
+    philHealth,
+    pagibig,
+    total: sss + philHealth + pagibig,
+    appliesThisCutoff,
+    fallback
   };
 }
 
@@ -2867,6 +2914,9 @@ function payrollAdjustmentValues(person, start, end) {
     commission: Number(adjustment?.commission_php ?? adjustment?.commissionPhp ?? adjustment?.commission ?? 0),
     cutoffPayOverride: adjustment?.cutoff_pay_override ?? adjustment?.cutoffPayOverride ?? null,
     grossPayOverride: adjustment?.gross_pay_override ?? adjustment?.grossPayOverride ?? null,
+    statutorySssOverride: adjustment?.statutory_sss_php ?? adjustment?.statutorySssPhp ?? null,
+    statutoryPhilHealthOverride: adjustment?.statutory_philhealth_php ?? adjustment?.statutoryPhilHealthPhp ?? null,
+    statutoryPagibigOverride: adjustment?.statutory_pagibig_php ?? adjustment?.statutoryPagibigPhp ?? null,
     paystubApproved: Boolean(adjustment?.paystub_approved ?? adjustment?.paystubApproved),
     paystubEmailedAt: adjustment?.paystub_emailed_at ?? adjustment?.paystubEmailedAt ?? null,
     note: adjustment?.note || ''
@@ -2911,7 +2961,7 @@ function buildPayrollRows(role = selectedPayrollRole) {
     const amountDeductionPhp = role === 'coaches' || (!monthlyPhp && hourlyUsd) ? values.deductedAmount * fx : values.deductedAmount;
     const quickDeductionPhp = hourDeductionPhp + amountDeductionPhp;
     const payableHours = values.payableHoursOverride !== null ? Math.max(0, values.payableHoursOverride) : Math.max(0, payrollBaseHours - hourAdjustment);
-    const statutory = role === 'admin' ? statutoryAdminDeductions(person) : { sss: 0, philHealth: 0, pagibig: 0, total: 0 };
+    const statutory = role === 'admin' ? statutoryAdminDeductions(person, values, start, end) : { sss: 0, philHealth: 0, pagibig: 0, total: 0, appliesThisCutoff: false, fallback: { sss: 0, philHealth: 0, pagibig: 0 } };
     let grossUsd = 0;
     let grossPhp = 0;
     if (role === 'coaches') {
@@ -2926,7 +2976,7 @@ function buildPayrollRows(role = selectedPayrollRole) {
     }
     const calculatedNetPay = grossPhp + values.adjustment + values.deductions + values.commission - quickDeductionPhp - statutory.total;
     const netPay = Math.max(0, calculatedNetPay);
-    return { ...values, payrollRole: role, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total };
+    return { ...values, payrollRole: role, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total, statutoryAppliesThisCutoff: statutory.appliesThisCutoff, statutoryFallback: statutory.fallback };
   });
 }
 
@@ -2988,7 +3038,10 @@ function adminDeductionsStack(row) {
     `PhilHealth -${phpMoney(row.statutoryPhilHealthPhp)}`,
     `Pag-IBIG -${phpMoney(row.statutoryPagibigPhp)}`
   ];
-  return `<span class="payroll-money payroll-adjustment-stack" title="Built-in statutory deductions are calculated per cutoff from the admin employee monthly rate.">${phpMoney(totalDeductionLine)}<small>${escapeHtml(details.join(' · '))}</small></span>`;
+  const statutoryNote = row.statutoryAppliesThisCutoff
+    ? 'Government deductions are charged once monthly on the 1-15 cutoff and can be edited per employee.'
+    : 'Government deductions are not charged on this cutoff. They apply only to the 1-15 cutoff paid on the 20th.';
+  return `<span class="payroll-money payroll-adjustment-stack" title="${escapeHtml(statutoryNote)}">${phpMoney(totalDeductionLine)}<small>${escapeHtml(details.join(' · '))}</small></span>`;
 }
 
 function generalAdjustmentStack(row) {
@@ -3047,7 +3100,7 @@ function renderPayroll() {
   $('#payrollRejectedOtHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.rejectedOtHours * 3600, 0));
   $('#payrollNetPay').textContent = phpMoney(currentPayrollRows.reduce((sum, row) => sum + row.netPay, 0));
   $('#payrollRangeLabel').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${selectedPayrollRole.toUpperCase()}`;
-  $('#payrollFooterHint').textContent = 'Click Actual Hrs or Hours to add or deduct time quickly. Admin payroll includes built-in SSS, PhilHealth, and Pag-IBIG deductions.';
+  $('#payrollFooterHint').textContent = 'Click Actual Hrs or Hours to adjust time quickly. Admin SSS, PhilHealth, and Pag-IBIG amounts are editable and charged only on the 1-15 cutoff paid on the 20th.';
   const approvedCount = currentPayrollRows.filter(row => row.paystubApproved).length;
   const recipientCount = currentPayrollRows.filter(row => paystubRecipients.some(item => item.employee_id === row.person.id)).length;
   const ready = currentPayrollRows.length > 0 && approvedCount === currentPayrollRows.length && recipientCount === currentPayrollRows.length;
@@ -3285,6 +3338,7 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Hour adjustment value', signedPhpPlain(row.quickDeductionPhp)]);
     lines.push(['Adjustments', `PHP ${row.adjustment.toFixed(2)}`]);
     lines.push(['Manual deductions', `PHP ${row.deductions.toFixed(2)}`]);
+    lines.push(['Government deductions', row.statutoryAppliesThisCutoff ? 'Charged this cutoff' : 'Not charged this cutoff']);
     lines.push(['SSS employee share', `PHP ${Number(row.statutorySssPhp || 0).toFixed(2)}`]);
     lines.push(['PhilHealth employee share', `PHP ${Number(row.statutoryPhilHealthPhp || 0).toFixed(2)}`]);
     lines.push(['Pag-IBIG employee share', `PHP ${Number(row.statutoryPagibigPhp || 0).toFixed(2)}`]);
@@ -3646,6 +3700,21 @@ function openPayrollRowEditor(employeeId) {
   $('#payrollRowCutoffPay').placeholder = `Calculated: ${row.cutoffPay.toFixed(2)}`;
   $('#payrollRowGrossPay').value = row.grossPayOverride ?? '';
   $('#payrollRowGrossPay').placeholder = `Calculated: ${row.grossPhp.toFixed(2)}`;
+  const statutoryFields = $('#payrollStatutoryFields');
+  const showStatutoryFields = selectedPayrollRole === 'admin';
+  if (statutoryFields) statutoryFields.hidden = !showStatutoryFields;
+  ['payrollRowSss', 'payrollRowPhilHealth', 'payrollRowPagibig'].forEach(id => {
+    const input = $(`#${id}`);
+    if (input) input.disabled = !showStatutoryFields || !row.statutoryAppliesThisCutoff;
+  });
+  if ($('#payrollRowSss')) $('#payrollRowSss').value = Number(row.statutorySssPhp || 0).toFixed(2);
+  if ($('#payrollRowPhilHealth')) $('#payrollRowPhilHealth').value = Number(row.statutoryPhilHealthPhp || 0).toFixed(2);
+  if ($('#payrollRowPagibig')) $('#payrollRowPagibig').value = Number(row.statutoryPagibigPhp || 0).toFixed(2);
+  if ($('#payrollStatutoryNote')) {
+    $('#payrollStatutoryNote').textContent = row.statutoryAppliesThisCutoff
+      ? `Charged once monthly on the 1-15 cutoff paid on the ${MONTHLY_STATUTORY_CUTOFF_DAYS.payDay}th. Edit these amounts if HR needs a different SSS, PhilHealth, or Pag-IBIG value.`
+      : `Not charged on this cutoff. SSS, PhilHealth, and Pag-IBIG are charged only on the 1-15 cutoff paid on the ${MONTHLY_STATUTORY_CUTOFF_DAYS.payDay}th.`;
+  }
   $('#payrollRowNote').value = row.note || '';
   $('#payrollCutoffPayField').hidden = selectedPayrollRole !== 'admin';
   $('#payrollGrossPayField').hidden = selectedPayrollRole !== 'smm';
@@ -4015,6 +4084,7 @@ async function saveQuickHoursAdjustment(event) {
     return;
   }
   const existing = row.record || {};
+  const existingHasStatutoryColumns = ['statutory_sss_php', 'statutory_philhealth_php', 'statutory_pagibig_php'].some(key => Object.prototype.hasOwnProperty.call(existing, key));
   const record = {
     employee_id: row.person.id,
     period_start: isoDate(start),
@@ -4028,6 +4098,11 @@ async function saveQuickHoursAdjustment(event) {
     commission_php: Number(existing.commission_php ?? existing.commissionPhp ?? row.commission ?? 0),
     cutoff_pay_override: existing.cutoff_pay_override ?? existing.cutoffPayOverride ?? null,
     gross_pay_override: existing.gross_pay_override ?? existing.grossPayOverride ?? null,
+    ...(existingHasStatutoryColumns ? {
+      statutory_sss_php: existing.statutory_sss_php ?? existing.statutorySssPhp ?? null,
+      statutory_philhealth_php: existing.statutory_philhealth_php ?? existing.statutoryPhilHealthPhp ?? null,
+      statutory_pagibig_php: existing.statutory_pagibig_php ?? existing.statutoryPagibigPhp ?? null
+    } : {}),
     paystub_approved: false,
     approved_at: null,
     approved_by: null,
@@ -4150,6 +4225,11 @@ async function savePayrollRow(event) {
     commission_php: Number($('#payrollRowCommission').value) || 0,
     cutoff_pay_override: $('#payrollRowCutoffPay').value === '' ? null : Math.max(0, Number($('#payrollRowCutoffPay').value) || 0),
     gross_pay_override: $('#payrollRowGrossPay').value === '' ? null : Math.max(0, Number($('#payrollRowGrossPay').value) || 0),
+    ...(editingPayrollRow.payrollRole === 'admin' ? {
+      statutory_sss_php: editingPayrollRow.statutoryAppliesThisCutoff ? Math.max(0, Number($('#payrollRowSss')?.value) || 0) : null,
+      statutory_philhealth_php: editingPayrollRow.statutoryAppliesThisCutoff ? Math.max(0, Number($('#payrollRowPhilHealth')?.value) || 0) : null,
+      statutory_pagibig_php: editingPayrollRow.statutoryAppliesThisCutoff ? Math.max(0, Number($('#payrollRowPagibig')?.value) || 0) : null
+    } : {}),
     paystub_approved: false,
     approved_at: null,
     approved_by: null,
@@ -4166,7 +4246,11 @@ async function savePayrollRow(event) {
   if (usesSupabase()) {
     const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
     if (error) {
-      const sqlHint = /payable_hours_override|column/i.test(error.message || '') ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.' : '';
+      const sqlHint = /statutory_sss_php|statutory_philhealth_php|statutory_pagibig_php/i.test(error.message || '')
+        ? ' Run outputs/sync2time-statutory-deductions-sql.sql in Supabase first.'
+        : /payable_hours_override|column/i.test(error.message || '')
+          ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.'
+          : '';
       $('#payrollRowError').textContent = `Could not save: ${error.message}.${sqlHint}`;
       $('#payrollRowError').hidden = false;
       return;
