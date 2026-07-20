@@ -131,9 +131,13 @@ let currentReportRows = [];
 let currentPayrollRows = [];
 let currentEmployeeReportRows = [];
 let selectedPayrollRole = 'coaches';
+const PAYROLL_ROLES = ['coaches', 'admin', 'webinar', 'smm', 'other'];
+const PAYROLL_ROLE_LABELS = { coaches: 'Coaches', admin: 'Admin', webinar: 'Webinar', smm: 'SMM', other: 'Other' };
 let editingPayrollRow = null;
 let editingPayrollAdjustment = null;
 let editingQuickHoursRow = null;
+let quickBooksStatus = { checked: false, connected: false, message: 'QuickBooks status has not been checked yet.' };
+let quickBooksSyncInProgress = false;
 let quickHoursDrafts = [];
 let deletedNoticeRepairAttempted = false;
 let approvedTimeEditRepairAttempted = false;
@@ -2869,10 +2873,10 @@ function payrollAdjustmentValues(person, start, end) {
   };
 }
 
-function buildPayrollRows() {
+function buildPayrollRows(role = selectedPayrollRole) {
   const { start, end, startKey } = payrollRange();
   const fx = payrollUsdPhpRate();
-  return rosterSource().filter(person => person.email?.toLowerCase() !== adminAccount.email && payrollRole(person) === selectedPayrollRole).map(person => {
+  return rosterSource().filter(person => person.email?.toLowerCase() !== adminAccount.email && payrollRole(person) === role).map(person => {
     const entries = supabaseTimeEntries.filter(entry => {
       if (entry.employee_id !== person.id || !entry.clock_in) return false;
       const date = new Date(entry.clock_in);
@@ -2904,25 +2908,25 @@ function buildPayrollRows() {
       ? payrollBaseHours - values.payableHoursOverride
       : values.deductedHours;
     const hourDeductionPhp = hourAdjustment * hourlyDeductionRatePhp;
-    const amountDeductionPhp = selectedPayrollRole === 'coaches' || (!monthlyPhp && hourlyUsd) ? values.deductedAmount * fx : values.deductedAmount;
+    const amountDeductionPhp = role === 'coaches' || (!monthlyPhp && hourlyUsd) ? values.deductedAmount * fx : values.deductedAmount;
     const quickDeductionPhp = hourDeductionPhp + amountDeductionPhp;
     const payableHours = values.payableHoursOverride !== null ? Math.max(0, values.payableHoursOverride) : Math.max(0, payrollBaseHours - hourAdjustment);
-    const statutory = selectedPayrollRole === 'admin' ? statutoryAdminDeductions(person) : { sss: 0, philHealth: 0, pagibig: 0, total: 0 };
+    const statutory = role === 'admin' ? statutoryAdminDeductions(person) : { sss: 0, philHealth: 0, pagibig: 0, total: 0 };
     let grossUsd = 0;
     let grossPhp = 0;
-    if (selectedPayrollRole === 'coaches') {
+    if (role === 'coaches') {
       grossUsd = payrollBaseHours * hourlyUsd;
       grossPhp = grossUsd * fx;
-    } else if (selectedPayrollRole === 'admin') {
+    } else if (role === 'admin') {
       grossPhp = cutoffPay + otPay;
-    } else if (selectedPayrollRole === 'smm') {
+    } else if (role === 'smm') {
       grossPhp = values.grossPayOverride === null ? cutoffPay : Number(values.grossPayOverride);
-    } else if (selectedPayrollRole === 'other') {
+    } else if (role === 'other') {
       grossPhp = monthlyPhp ? cutoffPay : payrollBaseHours * hourlyUsd * fx;
     }
     const calculatedNetPay = grossPhp + values.adjustment + values.deductions + values.commission - quickDeductionPhp - statutory.total;
     const netPay = Math.max(0, calculatedNetPay);
-    return { ...values, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total };
+    return { ...values, payrollRole: role, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total };
   });
 }
 
@@ -3058,6 +3062,7 @@ function renderPayroll() {
       : 'Send sample emails first';
   }
   renderSampleBulkEmailPreview();
+  renderQuickBooksPanel();
 }
 
 function sampleBulkEmailRows() {
@@ -4258,6 +4263,229 @@ async function sendApprovedPaystubs() {
   }
 }
 
+function appReturnUrl() {
+  if (location.protocol === 'http:' || location.protocol === 'https:') return `${location.origin}${location.pathname}#payroll`;
+  return 'https://time.sync2va.com/#payroll';
+}
+
+function handleQuickBooksReturnNotice() {
+  const hash = location.hash || '';
+  if (!hash.includes('?')) return;
+  const [pageHash, queryString] = hash.split('?');
+  const params = new URLSearchParams(queryString || '');
+  const status = params.get('quickbooks');
+  if (!status) return;
+  if (pageHash.replace('#', '') !== 'payroll') location.hash = '#payroll';
+  if (status === 'connected') {
+    quickBooksStatus = {
+      checked: true,
+      connected: true,
+      environment: params.get('environment') || '',
+      realmId: params.get('realmId') || '',
+      message: 'QuickBooks connected successfully.'
+    };
+    showToast('QuickBooks connected successfully.');
+    setTimeout(() => refreshQuickBooksStatus(false), 700);
+  } else {
+    quickBooksStatus = {
+      checked: true,
+      connected: false,
+      error: params.get('message') || 'QuickBooks connection failed.'
+    };
+    showToast(`QuickBooks connection error: ${quickBooksStatus.error}`);
+  }
+  renderQuickBooksPanel();
+  if (history.replaceState) history.replaceState(null, document.title, `${location.pathname}${pageHash || '#payroll'}`);
+  showPage();
+}
+
+function buildQuickBooksPayrollRows() {
+  return PAYROLL_ROLES.flatMap(role => buildPayrollRows(role).map(row => ({ ...row, payrollRole: role })));
+}
+
+function quickBooksRoleSummary(rows) {
+  return PAYROLL_ROLES.map(role => {
+    const roleRows = rows.filter(row => row.payrollRole === role);
+    return {
+      role,
+      label: PAYROLL_ROLE_LABELS[role] || role,
+      employeeCount: roleRows.length,
+      grossPhp: Number(roleRows.reduce((sum, row) => sum + Number(row.grossPhp || 0), 0).toFixed(2)),
+      netPayPhp: Number(roleRows.reduce((sum, row) => sum + Number(row.netPay || 0), 0).toFixed(2))
+    };
+  }).filter(item => item.employeeCount > 0);
+}
+
+function quickBooksPayloadRows(rows) {
+  return rows.map(row => ({
+    employeeId: row.person.id,
+    employeeName: row.person.name,
+    email: row.person.email || '',
+    role: row.person.role || '',
+    payrollRole: row.payrollRole,
+    department: row.person.department || '',
+    expectedHours: Number(row.expectedHours || 0),
+    actualHours: Number(row.actualHours || 0),
+    payableHours: Number(row.payableHours || 0),
+    approvedOtHours: Number(row.otHours || 0),
+    pendingOtHours: Number(row.pendingOtHours || 0),
+    rejectedOtHours: Number(row.rejectedOtHours || 0),
+    usdHourlyRate: Number(row.hourlyUsd || 0),
+    grossUsd: Number(row.grossUsd || 0),
+    grossPhp: Number(row.grossPhp || 0),
+    adjustmentPhp: Number(row.adjustment || 0),
+    deductionsPhp: Number(row.deductions || 0),
+    commissionPhp: Number(row.commission || 0),
+    statutoryDeductionsPhp: Number(row.statutoryDeductionsPhp || 0),
+    netPayPhp: Number(row.netPay || 0),
+    note: row.note || ''
+  }));
+}
+
+function renderQuickBooksPanel() {
+  const statusEl = $('#quickbooksStatus');
+  const noteEl = $('#quickbooksSyncNote');
+  if (!statusEl || !noteEl) return;
+  const rows = buildQuickBooksPayrollRows();
+  const approvedRows = rows.filter(row => row.paystubApproved);
+  const totalNet = rows.reduce((sum, row) => sum + Number(row.netPay || 0), 0);
+  const missingApprovals = rows.filter(row => !row.paystubApproved);
+  const connectButton = $('#quickbooksConnect');
+  const refreshButton = $('#quickbooksRefresh');
+  const syncButton = $('#quickbooksSyncPayroll');
+
+  if (!usesSupabase()) {
+    statusEl.textContent = 'Sign in with the Supabase admin account before connecting QuickBooks.';
+    noteEl.textContent = 'QuickBooks sync is disabled while Sync2Time is running without a live Supabase admin session.';
+    if (connectButton) connectButton.disabled = true;
+    if (refreshButton) refreshButton.disabled = true;
+    if (syncButton) syncButton.disabled = true;
+    return;
+  }
+
+  const environmentLabel = quickBooksStatus.environment ? `${quickBooksStatus.environment}` : 'environment not checked';
+  if (quickBooksStatus.connected) {
+    statusEl.textContent = `Connected to QuickBooks ${environmentLabel}${quickBooksStatus.realmId ? ` · Company ID ${quickBooksStatus.realmId}` : ''}${quickBooksStatus.lastSyncAt ? ` · Last sync ${businessDateLabel(new Date(quickBooksStatus.lastSyncAt))}` : ''}.`;
+  } else {
+    statusEl.textContent = quickBooksStatus.message || quickBooksStatus.error || 'QuickBooks is not connected yet.';
+  }
+
+  if (!rows.length) {
+    noteEl.textContent = 'No payroll rows are available for this cutoff yet.';
+  } else if (missingApprovals.length) {
+    noteEl.textContent = `${approvedRows.length} of ${rows.length} paystubs approved. Missing approval: ${missingApprovals.slice(0, 4).map(row => row.person.name).join(', ')}${missingApprovals.length > 4 ? '...' : ''}.`;
+  } else {
+    noteEl.textContent = `${rows.length} approved employees are ready to sync. Total net payroll: ${phpMoney(totalNet)}.`;
+  }
+
+  if (connectButton) connectButton.disabled = quickBooksSyncInProgress;
+  if (refreshButton) refreshButton.disabled = quickBooksSyncInProgress;
+  if (syncButton) {
+    syncButton.disabled = quickBooksSyncInProgress || !quickBooksStatus.connected || !rows.length || Boolean(missingApprovals.length);
+    syncButton.textContent = quickBooksSyncInProgress ? 'Syncing...' : 'Sync approved cutoff';
+  }
+}
+
+async function refreshQuickBooksStatus(showFeedback = true) {
+  if (!usesSupabase()) {
+    quickBooksStatus = { checked: true, connected: false, message: 'Supabase admin login is required before checking QuickBooks.' };
+    renderQuickBooksPanel();
+    return quickBooksStatus;
+  }
+  const refreshButton = $('#quickbooksRefresh');
+  const originalText = refreshButton?.textContent || 'Check status';
+  if (refreshButton) {
+    refreshButton.disabled = true;
+    refreshButton.textContent = 'Checking...';
+  }
+  try {
+    const result = await invokeEdgeFunction('quickbooks-status', {});
+    quickBooksStatus = { checked: true, ...result };
+    if (showFeedback) showToast(result.connected ? 'QuickBooks is connected.' : (result.message || 'QuickBooks is not connected yet.'));
+  } catch (error) {
+    quickBooksStatus = { checked: true, connected: false, error: error.message || 'Could not check QuickBooks status.' };
+    if (showFeedback) showToast(`QuickBooks status error: ${quickBooksStatus.error}`);
+  } finally {
+    if (refreshButton) {
+      refreshButton.disabled = false;
+      refreshButton.textContent = originalText;
+    }
+    renderQuickBooksPanel();
+  }
+  return quickBooksStatus;
+}
+
+async function connectQuickBooks() {
+  if (!usesSupabase()) return showToast('Sign in as admin before connecting QuickBooks.');
+  const button = $('#quickbooksConnect');
+  const originalText = button?.textContent || 'Connect QuickBooks';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Opening QuickBooks...';
+  }
+  try {
+    const result = await invokeEdgeFunction('quickbooks-connect', { returnUrl: appReturnUrl() });
+    if (!result.authorizationUrl) throw new Error('QuickBooks authorization URL was not returned.');
+    window.location.href = result.authorizationUrl;
+  } catch (error) {
+    showToast(`QuickBooks connect error: ${error.message || 'unknown error'}`);
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+}
+
+async function syncApprovedPayrollToQuickBooks() {
+  if (!usesSupabase()) return showToast('Supabase admin login is required before QuickBooks sync.');
+  let status = quickBooksStatus;
+  if (!status.connected) status = await refreshQuickBooksStatus(false);
+  if (!status.connected) return showToast(status.error || status.message || 'Connect QuickBooks before syncing payroll.');
+
+  const rows = buildQuickBooksPayrollRows();
+  if (!rows.length) return showToast('No payroll rows are available for this cutoff.');
+  const missingApprovals = rows.filter(row => !row.paystubApproved);
+  if (missingApprovals.length) {
+    return showToast(`Approve every paystub first. Missing: ${missingApprovals.slice(0, 4).map(row => row.person.name).join(', ')}${missingApprovals.length > 4 ? '...' : ''}`);
+  }
+
+  const { start, end, payDateKey } = payrollRange();
+  const totalNetPayPhp = Number(rows.reduce((sum, row) => sum + Number(row.netPay || 0), 0).toFixed(2));
+  if (!(totalNetPayPhp > 0)) return showToast('The approved payroll total is zero, so nothing will be sent to QuickBooks.');
+  if (!confirm(`Sync ${rows.length} approved employee payroll lines to QuickBooks for ${businessDateLabel(start)} to ${businessDateLabel(end)}?\n\nThis creates one payroll journal entry for ${phpMoney(totalNetPayPhp)}.`)) return;
+
+  const button = $('#quickbooksSyncPayroll');
+  quickBooksSyncInProgress = true;
+  renderQuickBooksPanel();
+  try {
+    const payload = {
+      periodStart: isoDate(start),
+      periodEnd: isoDate(end),
+      payDate: payDateKey,
+      roleScope: 'all',
+      fxRate: payrollUsdPhpRate(),
+      totalGrossPhp: Number(rows.reduce((sum, row) => sum + Number(row.grossPhp || 0), 0).toFixed(2)),
+      totalNetPayPhp,
+      employeeCount: rows.length,
+      roleSummary: quickBooksRoleSummary(rows),
+      rows: quickBooksPayloadRows(rows)
+    };
+    if (button) button.textContent = 'Sending to QuickBooks...';
+    const result = await invokeEdgeFunction('quickbooks-sync-payroll', payload);
+    await refreshQuickBooksStatus(false);
+    if (result.alreadySynced) {
+      showToast(`This cutoff was already synced to QuickBooks Journal Entry ${result.journalEntryId || result.quickbooksId || ''}.`);
+    } else {
+      showToast(`QuickBooks sync complete. Journal Entry ${result.journalEntryId || result.quickbooksId || 'created'}.`);
+    }
+  } catch (error) {
+    showToast(`QuickBooks sync error: ${error.message || 'unknown error'}`);
+  } finally {
+    quickBooksSyncInProgress = false;
+    renderQuickBooksPanel();
+  }
+}
+
 function openEmployeeDetail(name) {
   const added = managedEmployees.find(item => item.name === name);
   const person = liveEmployees().find(item => item.name === name) || allRosterWithExtras().find(item => item.name === name) || (added && { name: added.name, role: added.jobRole, department: added.department || 'Added by admin', task: 'Not assigned', rate: null, scheduledStart: null, scheduledEnd: null, schedule: 'Not assigned', initials: added.initials, color: '#bad7ed', clockIn: '—', clockOut: '—', worked: '0h 00m', status: 'complete' });
@@ -5361,6 +5589,9 @@ $('#aiAlertRefresh').onclick = async () => {
 $('#sendPaystubs').onclick = sendApprovedPaystubs;
 if ($('#sendEmployeeSamplePaystubs')) $('#sendEmployeeSamplePaystubs').onclick = sendEmployeeSamplePaystubs;
 if ($('#sendSampleBulkEmail')) $('#sendSampleBulkEmail').onclick = sendSampleBulkEmail;
+if ($('#quickbooksRefresh')) $('#quickbooksRefresh').onclick = () => refreshQuickBooksStatus(true);
+if ($('#quickbooksConnect')) $('#quickbooksConnect').onclick = connectQuickBooks;
+if ($('#quickbooksSyncPayroll')) $('#quickbooksSyncPayroll').onclick = syncApprovedPayrollToQuickBooks;
 $('#managePaystubTemplates').onclick = () => openPaystubEmailEditor();
 $('#paystubEmailForm').onsubmit = openManualPaystubGmail;
 $('#paystubEmailClose').onclick = closePaystubEmailEditor;
@@ -5775,6 +6006,7 @@ document.body.addEventListener('click', async event => {
     const { data } = await supabaseClient.auth.getSession();
     if (data.session) {
       await applySupabaseSession(data.session);
+      handleQuickBooksReturnNotice();
     }
   }
   const savedSession = (!supabaseClient && !currentAccount) ? JSON.parse(sessionStorage.getItem('minute-session') || 'null') : null;
