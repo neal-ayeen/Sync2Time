@@ -4331,11 +4331,19 @@ function quickBooksPayloadRows(rows) {
     pendingOtHours: Number(row.pendingOtHours || 0),
     rejectedOtHours: Number(row.rejectedOtHours || 0),
     usdHourlyRate: Number(row.hourlyUsd || 0),
+    phpRate: Number(payrollUsdPhpRate() || 0),
     grossUsd: Number(row.grossUsd || 0),
     grossPhp: Number(row.grossPhp || 0),
+    hourAdjustment: Number(row.deductedHours || 0),
+    hourAdjustmentPhp: Number(row.hourDeductionPhp || 0),
+    amountDeductionPhp: Number(row.amountDeductionPhp || 0),
+    quickDeductionPhp: Number(row.quickDeductionPhp || 0),
     adjustmentPhp: Number(row.adjustment || 0),
     deductionsPhp: Number(row.deductions || 0),
     commissionPhp: Number(row.commission || 0),
+    statutorySssPhp: Number(row.statutorySssPhp || 0),
+    statutoryPhilHealthPhp: Number(row.statutoryPhilHealthPhp || 0),
+    statutoryPagibigPhp: Number(row.statutoryPagibigPhp || 0),
     statutoryDeductionsPhp: Number(row.statutoryDeductionsPhp || 0),
     netPayPhp: Number(row.netPay || 0),
     note: row.note || ''
@@ -4375,7 +4383,7 @@ function renderQuickBooksPanel() {
   } else if (missingApprovals.length) {
     noteEl.textContent = `${approvedRows.length} of ${rows.length} paystubs approved. Missing approval: ${missingApprovals.slice(0, 4).map(row => row.person.name).join(', ')}${missingApprovals.length > 4 ? '...' : ''}.`;
   } else {
-    noteEl.textContent = `${rows.length} approved employees are ready to sync. Total net payroll: ${phpMoney(totalNet)}.`;
+    noteEl.textContent = `${rows.length} approved employees are ready to sync as accounting journal lines. Total net pay: ${phpMoney(totalNet)}.`;
   }
 
   if (connectButton) connectButton.disabled = quickBooksSyncInProgress;
@@ -4451,8 +4459,8 @@ async function syncApprovedPayrollToQuickBooks() {
 
   const { start, end, payDateKey } = payrollRange();
   const totalNetPayPhp = Number(rows.reduce((sum, row) => sum + Number(row.netPay || 0), 0).toFixed(2));
-  if (!(totalNetPayPhp > 0)) return showToast('The approved payroll total is zero, so nothing will be sent to QuickBooks.');
-  if (!confirm(`Sync ${rows.length} approved employee payroll lines to QuickBooks for ${businessDateLabel(start)} to ${businessDateLabel(end)}?\n\nThis creates one payroll journal entry for ${phpMoney(totalNetPayPhp)}.`)) return;
+  if (!(totalNetPayPhp > 0)) return showToast('The approved net pay total is zero, so nothing will be sent to QuickBooks.');
+  if (!confirm(`Sync ${rows.length} approved employee pay lines to QuickBooks for ${businessDateLabel(start)} to ${businessDateLabel(end)}?\n\nThis creates one accounting Journal Entry only. It does not run QuickBooks Payroll.\n\nTotal net pay: ${phpMoney(totalNetPayPhp)}.`)) return;
 
   const button = $('#quickbooksSyncPayroll');
   quickBooksSyncInProgress = true;
@@ -4474,9 +4482,9 @@ async function syncApprovedPayrollToQuickBooks() {
     const result = await invokeEdgeFunction('quickbooks-sync-payroll', payload);
     await refreshQuickBooksStatus(false);
     if (result.alreadySynced) {
-      showToast(`This cutoff was already synced to QuickBooks Journal Entry ${result.journalEntryId || result.quickbooksId || ''}.`);
+      showToast(`This cutoff was already synced to QuickBooks accounting Journal Entry ${result.journalEntryId || result.quickbooksId || ''}.`);
     } else {
-      showToast(`QuickBooks sync complete. Journal Entry ${result.journalEntryId || result.quickbooksId || 'created'}.`);
+      showToast(`QuickBooks accounting sync complete. Journal Entry ${result.journalEntryId || result.quickbooksId || 'created'}.`);
     }
   } catch (error) {
     showToast(`QuickBooks sync error: ${error.message || 'unknown error'}`);
