@@ -1154,24 +1154,29 @@ async function applyApprovedTimeEdit(request, silent = false) {
     isoDate(new Date(entry.clock_in)) === request.date
   );
   let result;
+  let savedEntryId = null;
   if (existing) {
     result = await supabaseClient.from('time_entries').update({
       clock_in: start.toISOString(),
       clock_out: end.toISOString(),
       status: 'completed'
-    }).eq('id', existing.id).select('id').single();
-  } else {
+    }).eq('id', existing.id).select('id').maybeSingle();
+    if (result.error) return { ok: false, message: result.error.message };
+    savedEntryId = result.data?.id || null;
+  }
+  if (!savedEntryId) {
     result = await supabaseClient.from('time_entries').insert({
       employee_id: request.employeeId,
       task: addAsSeparateEntry ? `Approved added time${cleanTimeEditReason(request.reason) ? ` - ${cleanTimeEditReason(request.reason)}` : ''}` : 'Approved time correction',
       clock_in: start.toISOString(),
       clock_out: end.toISOString(),
       status: 'completed'
-    }).select('id').single();
+    }).select('id').maybeSingle();
+    if (result.error) return { ok: false, message: result.error.message };
+    savedEntryId = result.data?.id || null;
   }
-  if (result.error) return { ok: false, message: result.error.message };
   await loadSupabaseTimeEntries();
-  if (result.data?.id) await requestAiOvertimeReview(result.data.id);
+  if (savedEntryId) await requestAiOvertimeReview(savedEntryId);
   if (!silent) showToast('Approved time was applied to the employee log.');
   return { ok: true };
 }
@@ -1186,7 +1191,7 @@ async function applyCoachSelfTimeEdit({ sourceEntryId, date, clockIn, clockOut, 
   }
   const totalHours = secondsBetween(start, end) / 3600;
   const approvedEnd = totalHours > 3 ? new Date(start.getTime() + 3 * 60 * 60 * 1000) : end;
-  const existing = sourceEntryId ? supabaseTimeEntries.find(entry => entry.id === sourceEntryId) : null;
+  const existing = sourceEntryId ? supabaseTimeEntries.find(entry => entry.id === sourceEntryId && entry.employee_id === currentProfile.id) : null;
   const task = existing?.task || state.running?.task || 'Employee corrected time';
   const payload = {
     employee_id: currentProfile.id,
@@ -1195,11 +1200,31 @@ async function applyCoachSelfTimeEdit({ sourceEntryId, date, clockIn, clockOut, 
     clock_out: approvedEnd.toISOString(),
     status: 'completed'
   };
-  const result = sourceEntryId
-    ? await supabaseClient.from('time_entries').update(payload).eq('id', sourceEntryId).eq('employee_id', currentProfile.id).select('id').single()
-    : await supabaseClient.from('time_entries').insert(payload).select('id').single();
-  if (result.error) return { ok: false, message: result.error.message };
-  if (result.data?.id) await requestAiOvertimeReview(result.data.id);
+  let savedEntryId = null;
+  let result;
+  if (sourceEntryId) {
+    result = await supabaseClient
+      .from('time_entries')
+      .update(payload)
+      .eq('id', sourceEntryId)
+      .eq('employee_id', currentProfile.id)
+      .select('id')
+      .maybeSingle();
+    if (result.error) return { ok: false, message: result.error.message };
+    savedEntryId = result.data?.id || null;
+  }
+  if (sourceEntryId && !savedEntryId) {
+    return {
+      ok: false,
+      message: 'Sync2Time could not update the original time entry. Run outputs/sync2time-employee-time-edit-policy-sql.sql in Supabase, refresh the app, then try again.'
+    };
+  }
+  if (!savedEntryId) {
+    result = await supabaseClient.from('time_entries').insert(payload).select('id').maybeSingle();
+    if (result.error) return { ok: false, message: result.error.message };
+    savedEntryId = result.data?.id || null;
+  }
+  if (savedEntryId) await requestAiOvertimeReview(savedEntryId);
   let pendingExtra = 0;
   if (totalHours > 3) {
     pendingExtra = totalHours - 3;
