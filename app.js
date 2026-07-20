@@ -137,6 +137,20 @@ const MONTHLY_STATUTORY_CUTOFF_DAYS = { startDay: 1, endDay: 15, payDay: 20 };
 const STATUTORY_DEFAULTS_BY_EMPLOYEE = {
   'meabel borreta': { sss: 625, philHealth: 250, pagibig: 200 }
 };
+const DUAL_PAYROLL_ASSIGNMENTS = [
+  {
+    key: 'bookkeeping',
+    email: 'emily.lima@sync2va.com',
+    nameKey: 'emily a lima',
+    project: 'Bookkeeping',
+    role: 'Bookkeeper',
+    department: 'Bookkeeping',
+    payrollRole: 'other',
+    monthlyPhp: 8000,
+    cutoffPayPhp: 4000,
+    schedule: 'Flexible bookkeeping'
+  }
+];
 let editingPayrollRow = null;
 let editingPayrollAdjustment = null;
 let editingQuickHoursRow = null;
@@ -219,6 +233,73 @@ function nameKey(text) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ');
+}
+
+function realEmployeeId(person = {}) {
+  return person.employeeId || person.employee_id || person.id || '';
+}
+
+function personMatchesAssignment(person = {}, assignment) {
+  const email = String(person.email || '').toLowerCase();
+  return (assignment.email && email === assignment.email.toLowerCase()) ||
+    (assignment.nameKey && nameKey(person.name || person.full_name) === assignment.nameKey);
+}
+
+function dualAssignmentForPerson(person = {}, key = '') {
+  return DUAL_PAYROLL_ASSIGNMENTS.find(assignment =>
+    personMatchesAssignment(person, assignment) &&
+    (!key || assignment.key === key)
+  ) || null;
+}
+
+function payrollAssignmentKey(person = {}) {
+  return person.payrollAssignmentKey || person.assignmentKey || 'primary';
+}
+
+function isSecondaryPayrollAssignment(person = {}) {
+  return payrollAssignmentKey(person) !== 'primary';
+}
+
+function taskMatchesProject(task = '', project = '') {
+  const normalizedTask = nameKey(task);
+  const normalizedProject = nameKey(project);
+  return !!normalizedTask && !!normalizedProject && normalizedTask.includes(normalizedProject);
+}
+
+function entryMatchesDualAssignment(entry = {}, assignment) {
+  return taskMatchesProject(entry.task || '', assignment.project);
+}
+
+function currentEmployeeTaskValue() {
+  return state.running?.task || $('#taskInput')?.value || '';
+}
+
+function currentWorkIsDualAssignment(project = 'Bookkeeping') {
+  if (currentAccount?.role !== 'employee') return false;
+  const person = rosterPersonFor(currentAccount) || currentProfile || currentAccount || {};
+  const assignment = dualAssignmentForPerson(person);
+  return !!assignment && taskMatchesProject(currentEmployeeTaskValue(), project || assignment.project);
+}
+
+function crossesDualAssignmentBoundary(previousTask = '', nextTask = '') {
+  if (currentAccount?.role !== 'employee') return false;
+  const person = rosterPersonFor(currentAccount) || currentProfile || currentAccount || {};
+  const assignment = dualAssignmentForPerson(person);
+  if (!assignment) return false;
+  return taskMatchesProject(previousTask, assignment.project) !== taskMatchesProject(nextTask, assignment.project);
+}
+
+function employeeEffectiveOvertimeRole(role = '', task = '') {
+  const person = rosterPersonFor(currentAccount) || currentProfile || currentAccount || {};
+  const assignment = dualAssignmentForPerson(person);
+  if (assignment && taskMatchesProject(task || currentEmployeeTaskValue(), assignment.project)) return 'Other';
+  return overtimeRoleName(role);
+}
+
+function timeEditEffectiveRole(mode = 'correction', sourceEntryId = '') {
+  const sourceEntry = sourceEntryId ? supabaseTimeEntries.find(entry => entry.id === sourceEntryId) : null;
+  const task = sourceEntry?.task || currentEmployeeTaskValue();
+  return employeeEffectiveOvertimeRole(currentEmployeeJobRole(), task);
 }
 
 function toClock(minutes) {
@@ -690,7 +771,7 @@ async function completeSupabaseTimeEntry(end) {
     .eq('id', state.running.timeEntryId)
     .eq('employee_id', currentProfile.id);
   if (error) showToast(`Clock-out error: ${error.message}`);
-  else requestAiOvertimeReview(state.running.timeEntryId).then(() => loadOvertimeAlerts().then(renderAiAlerts));
+  else if (!currentWorkIsDualAssignment()) requestAiOvertimeReview(state.running.timeEntryId).then(() => loadOvertimeAlerts().then(renderAiAlerts));
 }
 
 async function updateSupabaseRunningTask(task) {
@@ -2007,7 +2088,8 @@ function currentEmployeeJobRole() {
 }
 
 function longSessionPromptAppliesToCurrentEmployee() {
-  return currentAccount?.role === 'employee' && overtimeRoleName(currentEmployeeJobRole()) === 'Coach';
+  return currentAccount?.role === 'employee' &&
+    employeeEffectiveOvertimeRole(currentEmployeeJobRole(), currentEmployeeTaskValue()) === 'Coach';
 }
 
 function roleHourRuleFor(role = '') {
@@ -2019,33 +2101,49 @@ function alertEmployeeName(alert) {
   return alert.profiles?.full_name || rosterSource().find(person => person.id === alert.employee_id)?.name || 'Employee';
 }
 
+function alertBelongsToPersonRole(alert, person) {
+  const assignment = dualAssignmentForPerson(person);
+  if (!assignment) return true;
+  const entry = alert.time_log_id ? supabaseTimeEntries.find(item => item.id === alert.time_log_id) : null;
+  const isAssignmentAlert = entry ? entryMatchesDualAssignment(entry, assignment) : false;
+  if (payrollAssignmentKey(person) === assignment.key) return isAssignmentAlert;
+  if (payrollRole(person) === 'coaches') return !isAssignmentAlert;
+  return true;
+}
+
 function approvedAiAlertOtHours(person, start, end) {
+  const employeeId = payrollEntryEmployeeId(person);
   return overtimeAlerts.filter(alert => {
     const date = businessDateFromKey(alert.alert_date);
-    return alert.employee_id === person.id &&
+    return alert.employee_id === employeeId &&
       alert.status === 'approved' &&
       alert.admin_decision === 'approve_ot' &&
       !alert.has_approved_ot &&
+      alertBelongsToPersonRole(alert, person) &&
       date >= start &&
       date <= end;
   }).reduce((sum, alert) => sum + Number(alert.excess_hours || 0), 0);
 }
 
 function pendingAiAlertHours(person, start, end) {
+  const employeeId = payrollEntryEmployeeId(person);
   return overtimeAlerts.filter(alert => {
     const date = businessDateFromKey(alert.alert_date);
-    return alert.employee_id === person.id &&
+    return alert.employee_id === employeeId &&
       ['new', 'pending_employee_explanation', 'payroll_pending'].includes(alert.status) &&
+      alertBelongsToPersonRole(alert, person) &&
       date >= start &&
       date <= end;
   }).reduce((sum, alert) => sum + Number(alert.excess_hours || 0), 0);
 }
 
 function rejectedAiAlertHours(person, start, end) {
+  const employeeId = payrollEntryEmployeeId(person);
   return overtimeAlerts.filter(alert => {
     const date = businessDateFromKey(alert.alert_date);
-    return alert.employee_id === person.id &&
+    return alert.employee_id === employeeId &&
       alert.status === 'rejected' &&
+      alertBelongsToPersonRole(alert, person) &&
       date >= start &&
       date <= end;
   }).reduce((sum, alert) => sum + Number(alert.excess_hours || 0), 0);
@@ -2612,14 +2710,26 @@ function syncReportDatesFromPeriod() {
   $('#reportEnd').value = isoDate(end);
 }
 
-function adjustmentFor(employeeId, start, end) {
+function adjustmentFor(employeeId, start, end, assignmentKey = 'primary') {
   const startKey = isoDate(start);
   const endKey = isoDate(end);
   return payrollAdjustments.find(item =>
     (item.employee_id || item.employeeId) === employeeId &&
     (item.period_start || item.periodStart) === startKey &&
-    (item.period_end || item.periodEnd) === endKey
+    (item.period_end || item.periodEnd) === endKey &&
+    ((item.assignment_key || item.assignmentKey || 'primary') === assignmentKey)
   ) || null;
+}
+
+function payrollAdjustmentConflictTarget() {
+  return 'employee_id,period_start,period_end,assignment_key';
+}
+
+function payrollAdjustmentMatches(item, employeeId, startKey, endKey, assignmentKey = 'primary') {
+  return (item.employee_id || item.employeeId) === employeeId &&
+    (item.period_start || item.periodStart) === startKey &&
+    (item.period_end || item.periodEnd) === endKey &&
+    ((item.assignment_key || item.assignmentKey || 'primary') === assignmentKey);
 }
 
 function renderReports() {
@@ -2752,12 +2862,59 @@ function payrollRange() {
 }
 
 function payrollRole(person) {
+  if (person?.payrollRoleOverride) return person.payrollRoleOverride;
   const role = String(person.role || '').toLowerCase();
   if (role.includes('webinar')) return 'webinar';
   if (role.includes('smm')) return 'smm';
   if (role.includes('coach')) return 'coaches';
   if (role.includes('admin')) return 'admin';
   return 'other';
+}
+
+function payrollPersonForDualAssignment(person, assignment) {
+  return {
+    ...person,
+    payrollAssignmentKey: assignment.key,
+    payrollRoleOverride: assignment.payrollRole,
+    primaryRole: person.role,
+    role: assignment.role,
+    department: assignment.department,
+    task: assignment.project,
+    rate: assignment.monthlyPhp,
+    rateType: 'Monthly PHP',
+    scheduledStart: null,
+    scheduledEnd: null,
+    schedule: assignment.schedule,
+    dualAssignment: assignment
+  };
+}
+
+function payrollRosterForRole(role = selectedPayrollRole) {
+  const base = rosterSource().filter(person =>
+    person.email?.toLowerCase() !== adminAccount.email &&
+    payrollRole(person) === role
+  );
+  const dualRows = role === 'other'
+    ? rosterSource()
+      .filter(person => person.email?.toLowerCase() !== adminAccount.email)
+      .flatMap(person => DUAL_PAYROLL_ASSIGNMENTS
+        .filter(assignment => assignment.payrollRole === role && personMatchesAssignment(person, assignment))
+        .map(assignment => payrollPersonForDualAssignment(person, assignment)))
+    : [];
+  return [...base, ...dualRows];
+}
+
+function payrollEntryBelongsToPersonRole(entry, person, role) {
+  const assignment = dualAssignmentForPerson(person);
+  if (!assignment) return true;
+  const isAssignmentEntry = entryMatchesDualAssignment(entry, assignment);
+  if (payrollAssignmentKey(person) === assignment.key) return isAssignmentEntry;
+  if (role === 'coaches') return !isAssignmentEntry;
+  return true;
+}
+
+function payrollEntryEmployeeId(person) {
+  return realEmployeeId(person);
 }
 
 function scheduledHoursInRange(person, start, end) {
@@ -2928,7 +3085,7 @@ function statutoryAdminDeductions(person, values, start, end) {
 }
 
 function payrollAdjustmentValues(person, start, end) {
-  const adjustment = adjustmentFor(person.id, start, end);
+  const adjustment = adjustmentFor(payrollEntryEmployeeId(person), start, end, payrollAssignmentKey(person));
   return {
     record: adjustment,
     deductedHours: Number(adjustment?.deducted_hours ?? adjustment?.deductedHours ?? 0),
@@ -2951,16 +3108,17 @@ function payrollAdjustmentValues(person, start, end) {
 function buildPayrollRows(role = selectedPayrollRole) {
   const { start, end, startKey } = payrollRange();
   const fx = payrollUsdPhpRate();
-  return rosterSource().filter(person => person.email?.toLowerCase() !== adminAccount.email && payrollRole(person) === role).map(person => {
+  return payrollRosterForRole(role).map(person => {
+    const employeeId = payrollEntryEmployeeId(person);
     const entries = supabaseTimeEntries.filter(entry => {
-      if (entry.employee_id !== person.id || !entry.clock_in) return false;
+      if (entry.employee_id !== employeeId || !entry.clock_in) return false;
       const date = new Date(entry.clock_in);
-      return date >= start && date <= end;
+      return date >= start && date <= end && payrollEntryBelongsToPersonRole(entry, person, role);
     });
     const actualHours = entries.reduce((sum, entry) => sum + secondsBetween(entry.clock_in, entry.clock_out || Date.now()) / 3600, 0);
     const requestedOtHours = overtimeRequests.filter(request => {
       const date = businessDateFromKey(request.date);
-      return request.employeeId === person.id && request.status === 'approved' && date >= start && date <= end;
+      return request.employeeId === employeeId && request.status === 'approved' && date >= start && date <= end && !isSecondaryPayrollAssignment(person);
     }).reduce((sum, request) => sum + Number(request.hours || 0), 0);
     const aiApprovedOtHours = approvedAiAlertOtHours(person, start, end);
     const otHours = requestedOtHours + aiApprovedOtHours;
@@ -2972,7 +3130,7 @@ function buildPayrollRows(role = selectedPayrollRole) {
     const values = payrollAdjustmentValues(person, start, end);
     const hourlyUsd = typeof person.rate === 'number' && person.rate < 1000 ? person.rate : 0;
     const monthlyPhp = typeof person.rate === 'number' && person.rate >= 1000 ? person.rate : 0;
-    const calculatedCutoffPay = monthlyPhp / 2;
+    const calculatedCutoffPay = person.dualAssignment?.cutoffPayPhp ?? monthlyPhp / 2;
     const cutoffPay = values.cutoffPayOverride === null ? calculatedCutoffPay : Number(values.cutoffPayOverride);
     const monthStart = businessDateFromKey(`${startKey.slice(0, 7)}-01`);
     const monthEnd = businessDateFromKey(`${startKey.slice(0, 7)}-${pad(businessMonthLastDay(Number(startKey.slice(0, 4)), Number(startKey.slice(5, 7))))}`);
@@ -3001,7 +3159,7 @@ function buildPayrollRows(role = selectedPayrollRole) {
     }
     const calculatedNetPay = grossPhp + values.adjustment + values.deductions + values.commission - quickDeductionPhp - statutory.total;
     const netPay = Math.max(0, calculatedNetPay);
-    return { ...values, payrollRole: role, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total, statutoryAppliesThisCutoff: statutory.appliesThisCutoff, statutoryFallback: statutory.fallback };
+    return { ...values, assignmentKey: payrollAssignmentKey(person), employeeId, payrollRole: role, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total, statutoryAppliesThisCutoff: statutory.appliesThisCutoff, statutoryFallback: statutory.fallback };
   });
 }
 
@@ -3194,6 +3352,7 @@ async function sendSampleBulkEmail() {
           testMode: true,
           testRecipient: recipient,
           employeeId: row.person.id,
+          assignmentKey: row.assignmentKey || 'primary',
           employeeName: row.person.name,
           periodStart: isoDate(start),
           periodEnd: isoDate(end),
@@ -3245,6 +3404,7 @@ async function sendEmployeeSamplePaystubs() {
         testMode: true,
         testRecipient: paystubRecipientForRow(row),
         employeeId: row.person.id,
+        assignmentKey: row.assignmentKey || 'primary',
         employeeName: row.person.name,
         periodStart: isoDate(start),
         periodEnd: isoDate(end),
@@ -3414,7 +3574,8 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
   doc.setFontSize(8);
   doc.text(`Generated by Sync2Time on ${businessDateTimeLabel(new Date())}`, 38, 808);
   doc.text('Confidential payroll document', pageWidth - 38, 808, { align: 'right' });
-  const filename = `Sync2Time-Paystub-${slug(row.person.name)}-${isoDate(start)}-to-${isoDate(end)}.pdf`;
+  const assignmentSuffix = row.assignmentKey && row.assignmentKey !== 'primary' ? `-${slug(row.assignmentKey)}` : '';
+  const filename = `Sync2Time-Paystub-${slug(row.person.name)}${assignmentSuffix}-${isoDate(start)}-to-${isoDate(end)}.pdf`;
   const base64 = doc.output('datauristring').split(',')[1];
   if (shouldDownload) {
     doc.save(filename);
@@ -3655,6 +3816,7 @@ async function savePayrollAdjustment(event) {
     employee_id: editingPayrollAdjustment.employeeId,
     period_start: editingPayrollAdjustment.start,
     period_end: editingPayrollAdjustment.end,
+    assignment_key: 'primary',
     deducted_hours: dbDeductedHours(deductedHours),
     payable_hours_override: newPayableHours,
     deducted_amount: deductedAmount,
@@ -3667,19 +3829,23 @@ async function savePayrollAdjustment(event) {
   };
   let savedAdjustmentId = previousAdjustment?.id || null;
   if (usesSupabase()) {
-    const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
+    const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: payrollAdjustmentConflictTarget() }).select().single();
     if (error) {
-      const sqlHint = /payable_hours_override|column/i.test(error.message || '') ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.' : ' Run the payroll adjustments SQL in Supabase first.';
+      const sqlHint = /assignment_key|unique|conflict/i.test(error.message || '')
+        ? ' Run outputs/sync2time-dual-role-payroll-sql.sql in Supabase first.'
+        : /payable_hours_override|column/i.test(error.message || '')
+          ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.'
+          : ' Run the payroll adjustments SQL in Supabase first.';
       $('#payrollAdjustmentError').textContent = `Could not save: ${error.message}.${sqlHint}`;
       $('#payrollAdjustmentError').hidden = false;
       return;
     }
     savedAdjustmentId = data.id;
-    payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !((item.employee_id === data.employee_id) && item.period_start === data.period_start && item.period_end === data.period_end));
+    payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !payrollAdjustmentMatches(item, data.employee_id, data.period_start, data.period_end, data.assignment_key || 'primary'));
     payrollAdjustments.push(data);
   } else {
-    payrollAdjustments = payrollAdjustments.filter(item => !((item.employeeId === record.employee_id) && item.periodStart === record.period_start && item.periodEnd === record.period_end));
-    payrollAdjustments.push({ id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, deductedHours: record.deducted_hours, payableHoursOverride: record.payable_hours_override, deductedAmount, commission, note, updatedAt: record.updated_at });
+    payrollAdjustments = payrollAdjustments.filter(item => !payrollAdjustmentMatches(item, record.employee_id, record.period_start, record.period_end, record.assignment_key));
+    payrollAdjustments.push({ id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, assignmentKey: record.assignment_key, deductedHours: record.deducted_hours, payableHoursOverride: record.payable_hours_override, deductedAmount, commission, note, updatedAt: record.updated_at });
     persistPayrollAdjustments();
   }
   if (Math.abs(deductedHoursDelta) > 0.004 || note) {
@@ -4110,10 +4276,12 @@ async function saveQuickHoursAdjustment(event) {
   }
   const existing = row.record || {};
   const existingHasStatutoryColumns = ['statutory_sss_php', 'statutory_philhealth_php', 'statutory_pagibig_php'].some(key => Object.prototype.hasOwnProperty.call(existing, key));
+  const assignmentKey = row.assignmentKey || 'primary';
   const record = {
-    employee_id: row.person.id,
+    employee_id: row.employeeId || row.person.id,
     period_start: isoDate(start),
     period_end: isoDate(end),
+    assignment_key: assignmentKey,
     deducted_hours: dbDeductedHours(deductedHours),
     payable_hours_override: newPayableHours,
     deducted_amount: Number(existing.deducted_amount ?? existing.deductedAmount ?? 0),
@@ -4136,19 +4304,23 @@ async function saveQuickHoursAdjustment(event) {
   };
   let savedAdjustmentId = existing.id || null;
   if (usesSupabase()) {
-    const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
+    const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: payrollAdjustmentConflictTarget() }).select().single();
     if (error) {
-      const sqlHint = /payable_hours_override|column/i.test(error.message || '') ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.' : '';
+      const sqlHint = /assignment_key|unique|conflict|column/i.test(error.message || '')
+        ? ' Run outputs/sync2time-dual-role-payroll-sql.sql in Supabase first.'
+        : /payable_hours_override|column/i.test(error.message || '')
+          ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.'
+          : '';
       $('#quickHoursError').textContent = `Could not save quick hours: ${error.message}.${sqlHint}`;
       $('#quickHoursError').hidden = false;
       return;
     }
     savedAdjustmentId = data.id;
-    payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !(item.employee_id === data.employee_id && item.period_start === data.period_start && item.period_end === data.period_end));
+    payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !payrollAdjustmentMatches(item, data.employee_id, data.period_start, data.period_end, data.assignment_key || 'primary'));
     payrollAdjustments.push(data);
   } else {
-    payrollAdjustments = payrollAdjustments.filter(item => !((item.employeeId || item.employee_id) === record.employee_id && (item.periodStart || item.period_start) === record.period_start && (item.periodEnd || item.period_end) === record.period_end));
-    payrollAdjustments.push({ ...record, id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, deductedHours: record.deducted_hours, payableHoursOverride: record.payable_hours_override });
+    payrollAdjustments = payrollAdjustments.filter(item => !payrollAdjustmentMatches(item, record.employee_id, record.period_start, record.period_end, record.assignment_key));
+    payrollAdjustments.push({ ...record, id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, assignmentKey: record.assignment_key, deductedHours: record.deducted_hours, payableHoursOverride: record.payable_hours_override });
     persistPayrollAdjustments();
   }
   let historyResult = { ok: true };
@@ -4161,7 +4333,7 @@ async function saveQuickHoursAdjustment(event) {
       runningDeducted = Math.min(actual, runningDeducted + draftHours);
       const result = await savePayrollAdjustmentEvent({
         payrollAdjustmentId: savedAdjustmentId,
-        employeeId: row.person.id,
+        employeeId: row.employeeId || row.person.id,
         periodStart: isoDate(start),
         periodEnd: isoDate(end),
         changeType: 'hours',
@@ -4178,7 +4350,7 @@ async function saveQuickHoursAdjustment(event) {
   } else if (Math.abs(deductedHoursDelta) > 0.004 || note) {
     historyResult = await savePayrollAdjustmentEvent({
       payrollAdjustmentId: savedAdjustmentId,
-      employeeId: row.person.id,
+      employeeId: row.employeeId || row.person.id,
       periodStart: isoDate(start),
       periodEnd: isoDate(end),
       changeType: 'hours',
@@ -4237,10 +4409,12 @@ async function savePayrollRow(event) {
     return;
   }
   const existing = editingPayrollRow.record || {};
+  const assignmentKey = editingPayrollRow.assignmentKey || 'primary';
   const record = {
-    employee_id: editingPayrollRow.person.id,
+    employee_id: editingPayrollRow.employeeId || editingPayrollRow.person.id,
     period_start: isoDate(start),
     period_end: isoDate(end),
+    assignment_key: assignmentKey,
     deducted_hours: Number(existing.deducted_hours ?? existing.deductedHours ?? 0),
     payable_hours_override: existing.payable_hours_override ?? existing.payableHoursOverride ?? null,
     deducted_amount: Number(existing.deducted_amount ?? existing.deductedAmount ?? 0),
@@ -4269,9 +4443,11 @@ async function savePayrollRow(event) {
     return;
   }
   if (usesSupabase()) {
-    const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: 'employee_id,period_start,period_end' }).select().single();
+    const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: payrollAdjustmentConflictTarget() }).select().single();
     if (error) {
-      const sqlHint = /statutory_sss_php|statutory_philhealth_php|statutory_pagibig_php/i.test(error.message || '')
+      const sqlHint = /assignment_key|unique|conflict/i.test(error.message || '')
+        ? ' Run outputs/sync2time-dual-role-payroll-sql.sql in Supabase first.'
+        : /statutory_sss_php|statutory_philhealth_php|statutory_pagibig_php/i.test(error.message || '')
         ? ' Run outputs/sync2time-statutory-deductions-sql.sql in Supabase first.'
         : /payable_hours_override|column/i.test(error.message || '')
           ? ' Run outputs/sync2time-payable-hours-override-sql.sql in Supabase first.'
@@ -4280,11 +4456,11 @@ async function savePayrollRow(event) {
       $('#payrollRowError').hidden = false;
       return;
     }
-    payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !(item.employee_id === data.employee_id && item.period_start === data.period_start && item.period_end === data.period_end));
+    payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !payrollAdjustmentMatches(item, data.employee_id, data.period_start, data.period_end, data.assignment_key || 'primary'));
     payrollAdjustments.push(data);
   } else {
-    payrollAdjustments = payrollAdjustments.filter(item => !((item.employeeId || item.employee_id) === record.employee_id && (item.periodStart || item.period_start) === record.period_start && (item.periodEnd || item.period_end) === record.period_end));
-    payrollAdjustments.push({ ...record, id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end });
+    payrollAdjustments = payrollAdjustments.filter(item => !payrollAdjustmentMatches(item, record.employee_id, record.period_start, record.period_end, record.assignment_key));
+    payrollAdjustments.push({ ...record, id: crypto.randomUUID(), employeeId: record.employee_id, periodStart: record.period_start, periodEnd: record.period_end, assignmentKey: record.assignment_key });
     persistPayrollAdjustments();
   }
   closePayrollRowEditor();
@@ -4314,19 +4490,25 @@ async function approvePayrollPaystub(employeeId) {
       employee_id: employeeId,
       period_start: isoDate(start),
       period_end: isoDate(end),
+      assignment_key: row.assignmentKey || 'primary',
       paystub_approved: approved,
       approved_at: approved ? new Date().toISOString() : null,
       approved_by: approved ? currentProfile.id : null
-    }, { onConflict: 'employee_id,period_start,period_end' });
+    }, { onConflict: payrollAdjustmentConflictTarget() });
   } else {
     const existing = row.record || {};
-    payrollAdjustments = payrollAdjustments.filter(item => !((item.employeeId || item.employee_id) === employeeId && (item.periodStart || item.period_start) === isoDate(start) && (item.periodEnd || item.period_end) === isoDate(end)));
-    payrollAdjustments.push({ ...existing, employeeId, periodStart: isoDate(start), periodEnd: isoDate(end), paystubApproved: approved, approvedAt: approved ? new Date().toISOString() : null });
+    payrollAdjustments = payrollAdjustments.filter(item => !payrollAdjustmentMatches(item, employeeId, isoDate(start), isoDate(end), row.assignmentKey || 'primary'));
+    payrollAdjustments.push({ ...existing, employeeId, periodStart: isoDate(start), periodEnd: isoDate(end), assignmentKey: row.assignmentKey || 'primary', paystubApproved: approved, approvedAt: approved ? new Date().toISOString() : null });
     persistPayrollAdjustments();
     renderPayroll();
     return;
   }
-  if (result.error) return showToast(`Approval error: ${result.error.message}`);
+  if (result.error) {
+    const sqlHint = /assignment_key|unique|conflict|column/i.test(result.error.message || '')
+      ? ' Run outputs/sync2time-dual-role-payroll-sql.sql in Supabase first.'
+      : '';
+    return showToast(`Approval error: ${result.error.message}.${sqlHint}`);
+  }
   await loadPayrollAdjustments();
   renderPayroll();
   showToast(`${row.person.name}'s paystub ${approved ? 'approved' : 'reopened'}.`);
@@ -4352,6 +4534,7 @@ async function sendApprovedPaystubs() {
       const pdf = await buildEmployeePaystub(row.person.id, false);
       await invokeEdgeFunction('send-paystubs', {
         employeeId: row.person.id,
+        assignmentKey: row.assignmentKey || 'primary',
         periodStart: isoDate(start),
         periodEnd: isoDate(end),
         filename: pdf.filename,
@@ -4428,6 +4611,7 @@ function quickBooksRoleSummary(rows) {
 function quickBooksPayloadRows(rows) {
   return rows.map(row => ({
     employeeId: row.person.id,
+    assignmentKey: row.assignmentKey || 'primary',
     employeeName: row.person.name,
     email: row.person.email || '',
     role: row.person.role || '',
@@ -5114,7 +5298,43 @@ $('#addTime').onclick = () => {
 
 $('#taskInput').onchange = async () => {
   if (!state.running) return;
-  state.running.task = $('#taskInput').value || 'Untitled task';
+  const nextTask = $('#taskInput').value || 'Untitled task';
+  const previousRunning = { ...state.running };
+  if (usesSupabase() && crossesDualAssignmentBoundary(previousRunning.task, nextTask)) {
+    const switchAt = Date.now();
+    await completeSupabaseTimeEntry(switchAt);
+    await loadSupabaseTimeEntries();
+    const nextEntry = await createSupabaseTimeEntry(nextTask, switchAt);
+    if (!nextEntry) {
+      await refreshOwnActiveSessionFromSupabase();
+      render();
+      return;
+    }
+    state.entries.unshift({
+      task: previousRunning.task,
+      seconds: secondsBetween(previousRunning.start, switchAt),
+      start: previousRunning.start,
+      end: switchAt,
+      timeEntryId: previousRunning.timeEntryId || null,
+      remote: true
+    });
+    const runningStart = nextEntry.start || switchAt;
+    state.running = {
+      task: nextEntry.task || nextTask,
+      note: previousRunning.note || '',
+      start: runningStart,
+      timeEntryId: nextEntry.id || null,
+      nextLongSessionCheckAt: runningStart + LONG_SESSION_SECONDS * 1000
+    };
+    longSessionDeadline = null;
+    if ($('#longSessionBackdrop')) $('#longSessionBackdrop').hidden = true;
+    save();
+    syncOwnLivePresence();
+    render();
+    showToast(`Started a new ${nextTask} time segment for accurate payroll.`);
+    return;
+  }
+  state.running.task = nextTask;
   save();
   await updateSupabaseRunningTask(state.running.task);
   syncOwnLivePresence();
@@ -5266,7 +5486,8 @@ $('#timeEditForm').onsubmit = async event => {
     $('#timeEditFormError').hidden = false;
     return;
   }
-  const isCoachEdit = mode === 'edit' && overtimeRoleName(currentEmployeeJobRole()) === 'Coach';
+  const effectiveEditRole = timeEditEffectiveRole(mode, form.dataset.timeEntryId || '');
+  const isCoachEdit = mode === 'edit' && effectiveEditRole === 'Coach';
   if (isCoachEdit && usesSupabase()) {
     if (hours > 3) {
       const proceed = confirm(`This coach time edit is ${hours.toFixed(2)} hours. Sync2Time will auto-approve the first 3 hours and send the extra ${(hours - 3).toFixed(2)} hour${hours - 3 === 1 ? '' : 's'} to admin approval. Continue?`);
@@ -5292,7 +5513,7 @@ $('#timeEditForm').onsubmit = async event => {
     showToast(result.message);
     return;
   }
-  if (overtimeRoleName(currentEmployeeJobRole()) === 'Coach' && hours > 3) {
+  if (effectiveEditRole === 'Coach' && hours > 3) {
     const proceed = confirm(`This coach time edit is ${hours.toFixed(2)} hours, which is more than the 3-hour coach limit. It will be sent to admin for approval before it is added to payroll. Continue?`);
     if (!proceed) return;
   }
