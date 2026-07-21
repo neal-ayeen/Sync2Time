@@ -976,6 +976,28 @@ function quickBooksMappingLinePlan(rows = buildQuickBooksPayrollRows()) {
   };
 }
 
+function quickBooksMappingEmployees(rows = buildQuickBooksPayrollRows()) {
+  const unique = new Map();
+  rows.forEach(row => {
+    const employeeId = row.person?.id || row.employeeId;
+    if (!employeeId || unique.has(employeeId)) return;
+    unique.set(employeeId, row);
+  });
+  return [...unique.values()].sort((a, b) => String(a.person?.name || '').localeCompare(String(b.person?.name || '')));
+}
+
+function quickBooksEmployeeDuplicateIssue(mapping = quickBooksMapping) {
+  const mappedNames = new Map();
+  for (const [employeeId, item] of Object.entries(mapping.employeeMappings || {})) {
+    if (!item?.quickbooksNameId) continue;
+    const key = `${item.quickbooksNameType || 'Employee'}:${item.quickbooksNameId}`;
+    const label = `${item.quickbooksDisplayName || 'QuickBooks name'} #${item.quickbooksNameId}`;
+    if (mappedNames.has(key)) return `Duplicate QuickBooks employee/name mapping: ${label} is already used by another Sync2Time employee.`;
+    mappedNames.set(key, employeeId);
+  }
+  return '';
+}
+
 function quickBooksMappingIssues(rows = buildQuickBooksPayrollRows()) {
   const issues = [];
   const totals = quickBooksAccountFieldTotals(rows);
@@ -990,28 +1012,45 @@ function quickBooksMappingIssues(rows = buildQuickBooksPayrollRows()) {
   if (Math.abs(plan.difference) >= 0.01 && !balancing.accountId) {
     issues.push(`Journal is off by ${phpMoney(Math.abs(plan.difference))}. Add an Auto-balance account or map every non-zero field.`);
   }
-  const mappedNames = new Map();
-  Object.values(quickBooksMapping.employeeMappings || {}).forEach(mapping => {
-    if (!mapping?.quickbooksNameId) return;
-    const key = `${mapping.quickbooksNameType || 'Employee'}:${mapping.quickbooksNameId}`;
-    const label = `${mapping.quickbooksDisplayName || 'QuickBooks name'} #${mapping.quickbooksNameId}`;
-    if (mappedNames.has(key)) issues.push(`Duplicate QuickBooks employee/name mapping: ${label} is used more than once.`);
-    mappedNames.set(key, label);
-  });
+  const duplicateIssue = quickBooksEmployeeDuplicateIssue(quickBooksMapping);
+  if (duplicateIssue) issues.push(duplicateIssue);
   return [...new Set(issues)];
 }
 
 function quickBooksMappingWarnings(rows = buildQuickBooksPayrollRows()) {
   const warnings = [];
-  const missingEmployees = rows.filter(row => !quickBooksMapping.employeeMappings[row.person.id]?.quickbooksNameId);
+  const missingEmployees = quickBooksMappingEmployees(rows).filter(row => !quickBooksMapping.employeeMappings[row.person.id]?.quickbooksNameId);
   if (missingEmployees.length) warnings.push(`${missingEmployees.length} employee${missingEmployees.length === 1 ? '' : 's'} do not have a QuickBooks name mapping yet. Sync will still work, but those journal lines will not be tagged to a QB employee/vendor/customer.`);
   return warnings;
+}
+
+function quickBooksEmployeeNameSelectHtml(employeeId, nameType, mapping = {}) {
+  const list = quickBooksNameResources(nameType);
+  const disabled = !list.length && nameType !== 'OtherName' ? ' disabled' : '';
+  return `<select data-qb-employee-name-id="${employeeId}"${disabled}>${quickBooksResourceOptionHtml(list, mapping.quickbooksNameId || '', `Choose QuickBooks ${nameType}`, mapping.quickbooksDisplayName || '')}</select>`;
+}
+
+function quickBooksEmployeeMappingRowHtml(row) {
+  const employeeId = row.person.id;
+  const mapping = quickBooksMapping.employeeMappings[employeeId] || {};
+  const nameType = QUICKBOOKS_NAME_TYPES.includes(mapping.quickbooksNameType) ? mapping.quickbooksNameType : 'Employee';
+  const status = mapping.quickbooksNameId
+    ? `${escapeHtml(mapping.quickbooksDisplayName || 'Mapped')} · ${escapeHtml(nameType)} #${escapeHtml(mapping.quickbooksNameId)}`
+    : 'Not mapped yet';
+  return `<div class="qb-employee-map-row qb-employee-map-editor-row" data-qb-employee-row="${employeeId}">
+    <span>${escapeHtml(row.person.name)}<small>${escapeHtml(row.person.role)} · ${escapeHtml(row.person.email || '')}</small></span>
+    <label>QB name type<select data-qb-employee-type="${employeeId}">${QUICKBOOKS_NAME_TYPES.map(type => `<option value="${type}" ${type === nameType ? 'selected' : ''}>${type}</option>`).join('')}</select></label>
+    <label>QuickBooks name${quickBooksEmployeeNameSelectHtml(employeeId, nameType, mapping)}</label>
+    <b data-qb-employee-status="${employeeId}">${status}</b>
+    <button class="secondary" data-qb-save-employee-row="${employeeId}" type="button">Save</button>
+  </div>`;
 }
 
 function renderQuickBooksMappingPanel() {
   const accountTarget = $('#quickbooksAccountMappings');
   if (!accountTarget) return;
   const rows = buildQuickBooksPayrollRows();
+  const employeeMappingRows = quickBooksMappingEmployees(rows);
   const totals = quickBooksAccountFieldTotals(rows);
   renderQuickBooksResourceStatus();
   if ($('#quickbooksCompanyId') && quickBooksResources.realmId && !$('#quickbooksCompanyId').value) $('#quickbooksCompanyId').value = quickBooksResources.realmId;
@@ -1032,19 +1071,15 @@ function renderQuickBooksMappingPanel() {
 
   const employeeSelect = $('#quickbooksEmployeeSelect');
   if (employeeSelect) {
-    const selected = employeeSelect.value || rows[0]?.person.id || '';
-    employeeSelect.innerHTML = rows.map(row => `<option value="${row.person.id}">${escapeHtml(row.person.name)} — ${escapeHtml(PAYROLL_ROLE_LABELS[row.payrollRole] || row.payrollRole)}</option>`).join('');
-    employeeSelect.value = rows.some(row => row.person.id === selected) ? selected : rows[0]?.person.id || '';
+    const selected = employeeSelect.value || employeeMappingRows[0]?.person.id || '';
+    employeeSelect.innerHTML = employeeMappingRows.map(row => `<option value="${row.person.id}">${escapeHtml(row.person.name)} — ${escapeHtml(PAYROLL_ROLE_LABELS[row.payrollRole] || row.payrollRole)}</option>`).join('');
+    employeeSelect.value = employeeMappingRows.some(row => row.person.id === selected) ? selected : employeeMappingRows[0]?.person.id || '';
     fillQuickBooksEmployeeMapForm();
   }
 
   const employeeRows = $('#quickbooksEmployeeMappingRows');
   if (employeeRows) {
-    employeeRows.innerHTML = rows.map(row => {
-      const mapping = quickBooksMapping.employeeMappings[row.person.id] || {};
-      const status = mapping.quickbooksNameId ? `${escapeHtml(mapping.quickbooksDisplayName || 'Mapped')} · ${escapeHtml(mapping.quickbooksNameType || 'Employee')} #${escapeHtml(mapping.quickbooksNameId)}` : 'Not mapped yet';
-      return `<div class="qb-employee-map-row"><span>${escapeHtml(row.person.name)}<small>${escapeHtml(row.person.role)} · ${escapeHtml(row.person.email || '')}</small></span><b>${status}</b></div>`;
-    }).join('') || '<div class="empty-state">No payroll employees available for this cutoff.</div>';
+    employeeRows.innerHTML = employeeMappingRows.map(quickBooksEmployeeMappingRowHtml).join('') || '<div class="empty-state">No payroll employees available for this cutoff.</div>';
   }
 
   const roleTarget = $('#quickbooksRoleMappings');
@@ -1055,10 +1090,13 @@ function renderQuickBooksMappingPanel() {
       const classControl = classList.length
         ? `<select data-qb-role-class-id="${role}">${quickBooksResourceOptionHtml(classList, mapping.classId, 'Choose QuickBooks class (optional)', mapping.className)}</select>`
         : `<input data-qb-role-class-id="${role}" value="${escapeHtml(mapping.classId || '')}" placeholder="QB class ID optional">`;
+      const status = mapping.classId ? `${escapeHtml(mapping.className || 'Mapped class')} #${escapeHtml(mapping.classId)}` : 'No class mapped';
       return `<div class="qb-role-map-row" data-qb-role-row="${role}">
         <span>${escapeHtml(PAYROLL_ROLE_LABELS[role] || role)}</span>
-        ${classControl}
-        <input data-qb-role-class-name="${role}" value="${escapeHtml(mapping.className || '')}" placeholder="Selected class name">
+        <label>QuickBooks class${classControl}</label>
+        <label>Selected class name<input data-qb-role-class-name="${role}" value="${escapeHtml(mapping.className || '')}" placeholder="Selected class name"></label>
+        <b data-qb-role-class-status="${role}">${status}</b>
+        <button class="secondary" data-qb-save-class-row="${role}" type="button">Save</button>
       </div>`;
     }).join('');
   }
@@ -1080,10 +1118,39 @@ function renderQuickBooksMappingPanel() {
       const resource = quickBooksSelectedResource(quickBooksResources.classes, event.currentTarget.value);
       const nameInput = $(`[data-qb-role-class-name="${role}"]`);
       if (resource && nameInput) nameInput.value = resource.fullyQualifiedName || resource.displayName || resource.name;
+      const status = $(`[data-qb-role-class-status="${role}"]`);
+      if (status) status.textContent = event.currentTarget.value ? 'Changed, not saved yet' : 'Class mapping will be cleared after save';
       quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
       persistQuickBooksMapping();
       renderQuickBooksMappingStatus();
     };
+  });
+  $$('[data-qb-save-class-row]').forEach(button => {
+    button.onclick = () => saveQuickBooksClassMappingRow(button.dataset.qbSaveClassRow);
+  });
+  $$('[data-qb-employee-type]').forEach(control => {
+    control.onchange = event => {
+      const employeeId = event.currentTarget.dataset.qbEmployeeType;
+      const nameType = event.currentTarget.value || 'Employee';
+      const nameControl = $(`[data-qb-employee-name-id="${employeeId}"]`);
+      if (nameControl) {
+        nameControl.innerHTML = quickBooksResourceOptionHtml(quickBooksNameResources(nameType), '', `Choose QuickBooks ${nameType}`, '');
+        nameControl.disabled = !quickBooksNameResources(nameType).length && nameType !== 'OtherName';
+      }
+      const status = $(`[data-qb-employee-status="${employeeId}"]`);
+      if (status) status.textContent = 'Changed, not saved yet';
+    };
+  });
+  $$('[data-qb-employee-name-id]').forEach(control => {
+    control.onchange = event => {
+      const employeeId = event.currentTarget.dataset.qbEmployeeNameId;
+      const status = $(`[data-qb-employee-status="${employeeId}"]`);
+      const selected = event.currentTarget.selectedOptions?.[0];
+      if (status) status.textContent = event.currentTarget.value ? `Changed: ${selected?.dataset?.name || selected?.textContent || 'selected name'}` : 'Mapping will be cleared after save';
+    };
+  });
+  $$('[data-qb-save-employee-row]').forEach(button => {
+    button.onclick = () => saveQuickBooksEmployeeMappingRow(button.dataset.qbSaveEmployeeRow);
   });
 
   renderQuickBooksMappingStatus();
@@ -1170,13 +1237,42 @@ function readQuickBooksMappingForm() {
       departmentId: ''
     };
   });
+  $$('[data-qb-employee-row]').forEach(rowEl => {
+    const employeeId = rowEl.dataset.qbEmployeeRow;
+    if (!employeeId) return;
+    const typeControl = $(`[data-qb-employee-type="${employeeId}"]`);
+    const idControl = $(`[data-qb-employee-name-id="${employeeId}"]`);
+    const selectedName = idControl?.tagName === 'SELECT'
+      ? idControl.selectedOptions?.[0]
+      : null;
+    const nameId = idControl?.value?.trim() || '';
+    const nameType = QUICKBOOKS_NAME_TYPES.includes(typeControl?.value) ? typeControl.value : 'Employee';
+    const displayName = selectedName?.dataset?.name || selectedName?.textContent?.replace(/#.*$/, '')?.trim() || '';
+    if (nameId) {
+      next.employeeMappings[employeeId] = {
+        quickbooksNameId: nameId,
+        quickbooksDisplayName: displayName,
+        quickbooksNameType: nameType
+      };
+    } else {
+      delete next.employeeMappings[employeeId];
+    }
+  });
   next.updatedAt = new Date().toISOString();
   return next;
 }
 
 async function saveQuickBooksMapping(showFeedback = true) {
   const previous = quickBooksMapping;
-  quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
+  const candidate = normalizeQuickBooksMapping(readQuickBooksMappingForm());
+  const duplicateIssue = quickBooksEmployeeDuplicateIssue(candidate);
+  if (duplicateIssue) {
+    quickBooksMapping = previous;
+    renderQuickBooksMappingPanel();
+    if (showFeedback) showToast(duplicateIssue);
+    return;
+  }
+  quickBooksMapping = candidate;
   persistQuickBooksMapping();
   renderQuickBooksMappingPanel();
   renderQuickBooksPanel();
@@ -1230,6 +1326,56 @@ async function saveQuickBooksEmployeeMapping() {
   persistQuickBooksMapping();
   await saveQuickBooksMapping(false);
   showToast('Employee QuickBooks name mapping saved.');
+}
+
+async function saveQuickBooksEmployeeMappingRow(employeeId) {
+  if (!employeeId) return showToast('Employee mapping row not found.');
+  quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
+  const typeControl = $(`[data-qb-employee-type="${employeeId}"]`);
+  const idControl = $(`[data-qb-employee-name-id="${employeeId}"]`);
+  const nameType = typeControl?.value || 'Employee';
+  const nameId = idControl?.value?.trim() || '';
+  const selectedOption = idControl?.tagName === 'SELECT' ? idControl.selectedOptions?.[0] : null;
+  const displayName = selectedOption?.dataset?.name || selectedOption?.textContent?.replace(/#.*$/, '')?.trim() || '';
+  if (nameId) {
+    const duplicate = Object.entries(quickBooksMapping.employeeMappings || {}).find(([otherId, mapping]) => (
+      otherId !== employeeId
+      && mapping?.quickbooksNameId
+      && mapping.quickbooksNameId === nameId
+      && (mapping.quickbooksNameType || 'Employee') === nameType
+    ));
+    if (duplicate) return showToast('That QuickBooks employee/name is already mapped to another Sync2Time employee.');
+    quickBooksMapping.employeeMappings[employeeId] = {
+      quickbooksNameId: nameId,
+      quickbooksDisplayName: displayName,
+      quickbooksNameType: QUICKBOOKS_NAME_TYPES.includes(nameType) ? nameType : 'Employee'
+    };
+  } else {
+    delete quickBooksMapping.employeeMappings[employeeId];
+  }
+  const duplicateIssue = quickBooksEmployeeDuplicateIssue(quickBooksMapping);
+  if (duplicateIssue) return showToast(duplicateIssue);
+  persistQuickBooksMapping();
+  await saveQuickBooksMapping(false);
+  showToast('Employee QuickBooks mapping saved.');
+}
+
+async function saveQuickBooksClassMappingRow(role) {
+  if (!role || !PAYROLL_ROLES.includes(role)) return showToast('Class mapping row not found.');
+  quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
+  const classControl = $(`[data-qb-role-class-id="${role}"]`);
+  const selectedOption = classControl?.tagName === 'SELECT' ? classControl.selectedOptions?.[0] : null;
+  const classId = classControl?.value?.trim() || '';
+  const className = selectedOption?.dataset?.name || $(`[data-qb-role-class-name="${role}"]`)?.value?.trim() || '';
+  quickBooksMapping.roleMappings[role] = {
+    classId,
+    className,
+    departmentId: '',
+    departmentName: ''
+  };
+  persistQuickBooksMapping();
+  await saveQuickBooksMapping(false);
+  showToast(`${PAYROLL_ROLE_LABELS[role] || role} QuickBooks class mapping saved.`);
 }
 
 function exportQuickBooksMapping() {
