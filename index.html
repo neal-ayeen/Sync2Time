@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260722-qbo-mapping-1" />
+  <link rel="stylesheet" href="styles.css?v=20260722-integration-qbo-1" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -33,6 +33,7 @@
       <a class="nav-item admin-only" href="#projects"><span>◒</span> Projects</a>
       <a class="nav-item admin-only" href="#reports"><span>▤</span> Reports</a>
       <a class="nav-item admin-only" href="#payroll"><span>$</span> Payroll</a>
+      <a class="nav-item admin-only" href="#integration"><span>QB</span> Integration</a>
       <a class="nav-item admin-only" href="#adjustments"><span>±</span> Add/Deduct</a>
       <a class="nav-item admin-only" href="#team"><span>♧</span> Team</a>
       <a class="nav-item admin-only" href="#approvals"><span>✓</span> Approvals</a>
@@ -176,6 +177,13 @@
       <div class="payroll-tabs" id="payrollTabs"><button class="payroll-tab active" data-payroll-role="coaches">Coaches</button><button class="payroll-tab" data-payroll-role="admin">Admin</button><button class="payroll-tab" data-payroll-role="webinar">Webinar</button><button class="payroll-tab" data-payroll-role="smm">SMM</button><button class="payroll-tab" data-payroll-role="other">Other</button></div>
       <div class="payroll-summary"><article><span>EMPLOYEES</span><b id="payrollEmployeeCount">0</b></article><article><span>ACTUAL HOURS</span><b id="payrollActualHours">0h 00m</b></article><article><span>APPROVED OT</span><b id="payrollOtHours">0h 00m</b></article><article><span>PENDING OT</span><b id="payrollPendingOtHours">0h 00m</b></article><article><span>REJECTED EXCESS</span><b id="payrollRejectedOtHours">0h 00m</b></article><article><span>NET PAY</span><b id="payrollNetPay">₱0.00</b></article></div>
       <div class="payroll-table-card"><div class="payroll-scroll-controls"><button class="secondary" id="payrollScrollLeft" type="button">← Left</button><span>Tip: click Actual Hrs or Hours to add or deduct time fast.</span><button class="secondary" id="payrollScrollRight" type="button">Right →</button></div><div class="payroll-table-scroll" id="payrollTableScroll"><div class="payroll-head" id="payrollHead"></div><div id="payrollRows"></div></div><div class="report-footer"><span id="payrollRangeLabel"></span><span id="payrollFooterHint">Click Edit to add adjustments, deductions, commissions, notes, and the paystub destination</span></div></div>
+      <div class="bulk-paystub-card"><div><p class="eyebrow">PAYSTUB APPROVAL STATUS</p><h3 id="bulkPaystubTitle">Approve employees before manual Gmail sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><div class="bulk-paystub-actions"><button class="secondary" id="sendEmployeeSamplePaystubs" type="button">Send sample emails</button><button class="start-btn" id="sendPaystubs" type="button" disabled>Use row Email</button></div></div>
+      <div class="manual-email-card"><div><p class="eyebrow">MANUAL GOOGLE EMAIL</p><h3>Send paystubs one employee at a time</h3><p>Use the Email button beside an employee. Sync2Time downloads the correct PDF and opens an editable Gmail draft from hr@sync2va.com.</p></div><button class="secondary" id="managePaystubTemplates" type="button">Manage email templates</button></div>
+      <div class="sample-bulk-email-card"><div><p class="eyebrow">BULK EMAIL TEST</p><h3>Sample bulk email checker</h3><p id="sampleBulkEmailPreview">Select a payroll tab to preview the sample email source.</p></div><label>Send sample to<input id="sampleBulkEmailRecipient" type="email" value="hr@sync2va.com"></label><button class="secondary" id="sendSampleBulkEmail" type="button">Send sample email</button></div>
+    </section>
+
+    <section class="integration-section admin-only" id="integration">
+      <div class="section-title"><div><p class="eyebrow">INTEGRATION HUB</p><h2>QuickBooks Online mapping</h2><p>Connect QuickBooks, fetch live lists, then map Sync2Time payroll fields to accounting journal entries.</p></div><button class="export" id="quickbooksExportMapping" type="button">Export mapping</button></div>
       <div class="quickbooks-card" id="quickbooksCard">
         <div>
           <p class="eyebrow">QUICKBOOKS ONLINE</p>
@@ -191,8 +199,20 @@
       </div>
       <div class="quickbooks-mapping-card" id="quickbooksMappingCard">
         <div class="qb-map-header">
-          <div><p class="eyebrow">MANUAL QUICKBOOKS MAPPING</p><h3>Choose where Sync2Time payroll fields go in QuickBooks</h3><p>Type or paste the QuickBooks account/name IDs you want to use. Sync2Time validates the mapping before it sends the journal entry.</p></div>
-          <div class="qb-map-actions"><button class="secondary" id="quickbooksValidateMapping" type="button">Validate preview</button><button class="secondary" id="quickbooksExportMapping" type="button">Export mapping</button><button class="start-btn" id="quickbooksSaveMapping" type="button">Save mapping</button></div>
+          <div><p class="eyebrow">QUICKBOOKS MAPPING</p><h3>Choose where Sync2Time payroll fields go in QuickBooks</h3><p>Fetch your QuickBooks accounts, classes, and names first. Then choose from dropdowns so the mapping is cleaner and duplicate IDs are blocked.</p></div>
+          <div class="qb-map-actions"><button class="secondary" id="quickbooksValidateMapping" type="button">Validate preview</button><button class="start-btn" id="quickbooksSaveMapping" type="button">Save mapping</button></div>
+        </div>
+        <div class="qb-resource-card">
+          <div>
+            <p class="eyebrow">FETCH QUICKBOOKS LISTS</p>
+            <h4>Bring QuickBooks accounts, classes, and employees into Sync2Time</h4>
+            <p>Optional: enter your QuickBooks Company ID / Realm ID to verify you are pulling from the correct company.</p>
+          </div>
+          <div class="qb-resource-controls">
+            <label>QuickBooks Company ID / Realm ID<input id="quickbooksCompanyId" placeholder="Optional, example: 934145..."></label>
+            <button class="secondary" id="quickbooksFetchResources" type="button">Fetch QuickBooks lists</button>
+          </div>
+          <div class="qb-resource-status" id="quickbooksResourceStatus">No QuickBooks lists fetched yet.</div>
         </div>
         <div class="qb-map-status" id="quickbooksMappingStatus"><b>Mapping not checked yet</b><span>Save or validate the mapping before syncing approved payroll.</span></div>
         <h4>1. Account mapping</h4>
@@ -201,8 +221,8 @@
         <div class="qb-employee-map-editor">
           <label>Sync2Time employee<select id="quickbooksEmployeeSelect"></select></label>
           <label>QB name type<select id="quickbooksEmployeeQboType"><option>Employee</option><option>Vendor</option><option>Customer</option><option>OtherName</option></select></label>
-          <label>QB display name<input id="quickbooksEmployeeQboName" placeholder="Example: Claudine San Juan"></label>
-          <label>QB name ID<input id="quickbooksEmployeeQboId" placeholder="Paste QuickBooks Employee/Vendor/Customer ID"></label>
+          <label>QB display name<input id="quickbooksEmployeeQboName" placeholder="Auto-fills from QuickBooks dropdown"></label>
+          <label>QB name<select id="quickbooksEmployeeQboId"></select></label>
           <button class="secondary" id="quickbooksSaveEmployeeMap" type="button">Save employee map</button>
         </div>
         <div class="qb-employee-mapping-rows" id="quickbooksEmployeeMappingRows"></div>
@@ -212,9 +232,6 @@
         <p class="qb-map-total" id="quickbooksMappingTotals">Preview not calculated yet.</p>
         <div class="qb-journal-preview" id="quickbooksMappingPreview"></div>
       </div>
-      <div class="bulk-paystub-card"><div><p class="eyebrow">PAYSTUB APPROVAL STATUS</p><h3 id="bulkPaystubTitle">Approve employees before manual Gmail sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><div class="bulk-paystub-actions"><button class="secondary" id="sendEmployeeSamplePaystubs" type="button">Send sample emails</button><button class="start-btn" id="sendPaystubs" type="button" disabled>Use row Email</button></div></div>
-      <div class="manual-email-card"><div><p class="eyebrow">MANUAL GOOGLE EMAIL</p><h3>Send paystubs one employee at a time</h3><p>Use the Email button beside an employee. Sync2Time downloads the correct PDF and opens an editable Gmail draft from hr@sync2va.com.</p></div><button class="secondary" id="managePaystubTemplates" type="button">Manage email templates</button></div>
-      <div class="sample-bulk-email-card"><div><p class="eyebrow">BULK EMAIL TEST</p><h3>Sample bulk email checker</h3><p id="sampleBulkEmailPreview">Select a payroll tab to preview the sample email source.</p></div><label>Send sample to<input id="sampleBulkEmailRecipient" type="email" value="hr@sync2va.com"></label><button class="secondary" id="sendSampleBulkEmail" type="button">Send sample email</button></div>
     </section>
 
     <section class="adjustments-center-section admin-only" id="adjustments">
@@ -365,6 +382,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260722-qbo-mapping-1"></script>
+  <script src="app.js?v=20260722-integration-qbo-1"></script>
 </body>
 </html>

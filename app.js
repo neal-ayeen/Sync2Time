@@ -158,6 +158,7 @@ let editingQuickHoursRow = null;
 let quickBooksStatus = { checked: false, connected: false, message: 'QuickBooks status has not been checked yet.' };
 let quickBooksSyncInProgress = false;
 const QUICKBOOKS_MAPPING_STORAGE_KEY = 'sync2time-quickbooks-payroll-mapping';
+const QUICKBOOKS_RESOURCES_STORAGE_KEY = 'sync2time-quickbooks-resources';
 const QUICKBOOKS_ACCOUNT_FIELDS = [
   { key: 'grossPay', label: 'Gross Pay', source: 'Gross PHP pay', postingType: 'Debit', required: true, defaultEnabled: true },
   { key: 'holidayPay', label: 'Holiday Pay', source: 'Holiday pay', postingType: 'Debit', required: false, defaultEnabled: true },
@@ -177,6 +178,8 @@ const QUICKBOOKS_ACCOUNT_FIELDS = [
 ];
 const QUICKBOOKS_NAME_TYPES = ['Employee', 'Vendor', 'Customer', 'OtherName'];
 let quickBooksMapping = normalizeQuickBooksMapping(JSON.parse(localStorage.getItem(QUICKBOOKS_MAPPING_STORAGE_KEY) || 'null'));
+let quickBooksResources = normalizeQuickBooksResources(JSON.parse(localStorage.getItem(QUICKBOOKS_RESOURCES_STORAGE_KEY) || 'null'));
+let quickBooksResourcesLoading = false;
 let quickHoursDrafts = [];
 let deletedNoticeRepairAttempted = false;
 let approvedTimeEditRepairAttempted = false;
@@ -757,6 +760,148 @@ function persistQuickBooksMapping() {
   localStorage.setItem(QUICKBOOKS_MAPPING_STORAGE_KEY, JSON.stringify(quickBooksMapping));
 }
 
+function quickBooksResourceKey(item = {}) {
+  const type = String(item.type || item.resourceType || '').trim().toLowerCase();
+  const id = String(item.id || item.Id || '').trim();
+  const name = String(item.name || item.displayName || item.fullyQualifiedName || item.Name || '').trim().toLowerCase();
+  return id ? `${type}:${id}` : `${type}:name:${name}`;
+}
+
+function normalizeQuickBooksResourceList(items, resourceType) {
+  const seen = new Map();
+  (Array.isArray(items) ? items : []).forEach(item => {
+    const source = item && typeof item === 'object' ? item : {};
+    const id = String(source.id || source.Id || '').trim();
+    const name = String(source.name || source.displayName || source.DisplayName || source.FullyQualifiedName || source.fullyQualifiedName || source.Name || '').trim();
+    if (!id || !name) return;
+    const normalized = {
+      id,
+      name,
+      displayName: String(source.displayName || source.DisplayName || name).trim(),
+      fullyQualifiedName: String(source.fullyQualifiedName || source.FullyQualifiedName || name).trim(),
+      type: String(source.type || source.resourceType || resourceType || '').trim(),
+      active: source.active === undefined ? source.Active !== false : Boolean(source.active),
+      accountType: String(source.accountType || source.AccountType || '').trim(),
+      accountSubType: String(source.accountSubType || source.AccountSubType || '').trim(),
+      classification: String(source.classification || source.Classification || '').trim()
+    };
+    const key = quickBooksResourceKey(normalized);
+    if (!seen.has(key)) seen.set(key, normalized);
+  });
+  return [...seen.values()].sort((a, b) => (a.fullyQualifiedName || a.name).localeCompare(b.fullyQualifiedName || b.name));
+}
+
+function normalizeQuickBooksResources(value) {
+  const record = value && typeof value === 'object' ? value : {};
+  return {
+    realmId: String(record.realmId || '').trim(),
+    companyName: String(record.companyName || '').trim(),
+    fetchedAt: record.fetchedAt || null,
+    accounts: normalizeQuickBooksResourceList(record.accounts, 'Account'),
+    classes: normalizeQuickBooksResourceList(record.classes, 'Class'),
+    employees: normalizeQuickBooksResourceList(record.employees, 'Employee'),
+    vendors: normalizeQuickBooksResourceList(record.vendors, 'Vendor'),
+    customers: normalizeQuickBooksResourceList(record.customers, 'Customer')
+  };
+}
+
+function persistQuickBooksResources() {
+  localStorage.setItem(QUICKBOOKS_RESOURCES_STORAGE_KEY, JSON.stringify(quickBooksResources));
+}
+
+function quickBooksResourcesCounts() {
+  return {
+    accounts: quickBooksResources.accounts.length,
+    classes: quickBooksResources.classes.length,
+    employees: quickBooksResources.employees.length,
+    vendors: quickBooksResources.vendors.length,
+    customers: quickBooksResources.customers.length
+  };
+}
+
+function quickBooksNameResources(type = 'Employee') {
+  if (type === 'Vendor') return quickBooksResources.vendors;
+  if (type === 'Customer') return quickBooksResources.customers;
+  if (type === 'OtherName') return [];
+  return quickBooksResources.employees;
+}
+
+function quickBooksSelectedResource(list, id) {
+  return (Array.isArray(list) ? list : []).find(item => String(item.id) === String(id)) || null;
+}
+
+function quickBooksResourceOptionHtml(list, selectedId, placeholder, fallbackName = '') {
+  const selected = String(selectedId || '').trim();
+  const fallback = selected && !quickBooksSelectedResource(list, selected)
+    ? `<option value="${escapeHtml(selected)}" selected data-name="${escapeHtml(fallbackName || selected)}">${escapeHtml(fallbackName || `Saved ID ${selected}`)} #${escapeHtml(selected)} (saved)</option>`
+    : '';
+  return `<option value="">${escapeHtml(placeholder)}</option>${fallback}${(Array.isArray(list) ? list : []).map(item => {
+    const meta = [item.type, item.accountType, item.classification].filter(Boolean).join(' · ');
+    return `<option value="${escapeHtml(item.id)}" ${String(item.id) === selected ? 'selected' : ''} data-name="${escapeHtml(item.fullyQualifiedName || item.displayName || item.name)}">${escapeHtml(item.fullyQualifiedName || item.displayName || item.name)}${meta ? ` · ${escapeHtml(meta)}` : ''} #${escapeHtml(item.id)}</option>`;
+  }).join('')}`;
+}
+
+function renderQuickBooksResourceStatus() {
+  const status = $('#quickbooksResourceStatus');
+  if (!status) return;
+  if (quickBooksResourcesLoading) {
+    status.textContent = 'Fetching QuickBooks lists...';
+    status.className = 'qb-resource-status loading';
+    return;
+  }
+  const counts = quickBooksResourcesCounts();
+  const hasResources = Object.values(counts).some(Boolean);
+  if (!hasResources) {
+    status.textContent = 'No QuickBooks lists fetched yet. Connect QuickBooks, then click Fetch QuickBooks lists.';
+    status.className = 'qb-resource-status';
+    return;
+  }
+  status.className = 'qb-resource-status ok';
+  status.innerHTML = `<b>${escapeHtml(quickBooksResources.companyName || 'QuickBooks company')}</b><span>${counts.accounts} accounts · ${counts.classes} classes · ${counts.employees} employees · ${counts.vendors} vendors · ${counts.customers} customers${quickBooksResources.realmId ? ` · Company ID ${escapeHtml(quickBooksResources.realmId)}` : ''}${quickBooksResources.fetchedAt ? ` · Fetched ${businessDateLabel(new Date(quickBooksResources.fetchedAt))}` : ''}</span>`;
+}
+
+async function fetchQuickBooksResources() {
+  if (!usesSupabase()) return showToast('Sign in as admin before fetching QuickBooks lists.');
+  let status = quickBooksStatus;
+  if (!status.connected) status = await refreshQuickBooksStatus(false);
+  if (!status.connected) return showToast(status.error || status.message || 'Connect QuickBooks before fetching lists.');
+  const button = $('#quickbooksFetchResources');
+  const originalText = button?.textContent || 'Fetch QuickBooks lists';
+  const realmId = $('#quickbooksCompanyId')?.value?.trim() || '';
+  quickBooksResourcesLoading = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Fetching...';
+  }
+  renderQuickBooksResourceStatus();
+  try {
+    const result = await invokeEdgeFunction('quickbooks-fetch-resources', { realmId });
+    quickBooksResources = normalizeQuickBooksResources(result);
+    persistQuickBooksResources();
+    if (quickBooksResources.realmId && $('#quickbooksCompanyId')) $('#quickbooksCompanyId').value = quickBooksResources.realmId;
+    if (usesSupabase() && currentProfile?.role === 'admin') {
+      try {
+        await saveSupabaseSetting('quickbooks_resources_cache', quickBooksResources);
+      } catch (error) {
+        if (!isMissingAppSettingsError(error)) throw error;
+        settingsTableMissing = true;
+      }
+    }
+    renderQuickBooksMappingPanel();
+    const counts = quickBooksResourcesCounts();
+    showToast(`Fetched ${counts.accounts} accounts, ${counts.classes} classes, and ${counts.employees} employees from QuickBooks.`);
+  } catch (error) {
+    showToast(`QuickBooks fetch error: ${error.message || 'unknown error'}`);
+  } finally {
+    quickBooksResourcesLoading = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+    renderQuickBooksResourceStatus();
+  }
+}
+
 function quickBooksPayrollFieldAmount(row, key) {
   const value = (...keys) => keys.map(name => Number(row[name] || 0)).find(number => Number.isFinite(number) && number !== 0) || 0;
   switch (key) {
@@ -845,6 +990,14 @@ function quickBooksMappingIssues(rows = buildQuickBooksPayrollRows()) {
   if (Math.abs(plan.difference) >= 0.01 && !balancing.accountId) {
     issues.push(`Journal is off by ${phpMoney(Math.abs(plan.difference))}. Add an Auto-balance account or map every non-zero field.`);
   }
+  const mappedNames = new Map();
+  Object.values(quickBooksMapping.employeeMappings || {}).forEach(mapping => {
+    if (!mapping?.quickbooksNameId) return;
+    const key = `${mapping.quickbooksNameType || 'Employee'}:${mapping.quickbooksNameId}`;
+    const label = `${mapping.quickbooksDisplayName || 'QuickBooks name'} #${mapping.quickbooksNameId}`;
+    if (mappedNames.has(key)) issues.push(`Duplicate QuickBooks employee/name mapping: ${label} is used more than once.`);
+    mappedNames.set(key, label);
+  });
   return [...new Set(issues)];
 }
 
@@ -860,14 +1013,20 @@ function renderQuickBooksMappingPanel() {
   if (!accountTarget) return;
   const rows = buildQuickBooksPayrollRows();
   const totals = quickBooksAccountFieldTotals(rows);
+  renderQuickBooksResourceStatus();
+  if ($('#quickbooksCompanyId') && quickBooksResources.realmId && !$('#quickbooksCompanyId').value) $('#quickbooksCompanyId').value = quickBooksResources.realmId;
   accountTarget.innerHTML = QUICKBOOKS_ACCOUNT_FIELDS.map(field => {
     const mapping = quickBooksMapping.accountMappings[field.key] || {};
     const total = Number(totals[field.key] || 0);
     const amountText = field.key === 'balancing' ? 'Used only if needed' : phpMoney(total);
+    const accountList = quickBooksResources.accounts;
+    const accountControl = accountList.length
+      ? `<select data-qb-account-id="${field.key}">${quickBooksResourceOptionHtml(accountList, mapping.accountId, 'Choose QuickBooks account', mapping.accountName)}</select>`
+      : `<input data-qb-account-id="${field.key}" value="${escapeHtml(mapping.accountId || '')}" placeholder="Fetch QuickBooks first, or paste Account ID">`;
     return `<div class="qb-map-row" data-qb-account-row="${field.key}">
       <label class="qb-toggle"><input type="checkbox" data-qb-account-enabled="${field.key}" ${mapping.enabled ? 'checked' : ''}> ${escapeHtml(field.label)}${field.required ? ' *' : ''}<small>${escapeHtml(field.source)} · ${escapeHtml(field.postingType)} · ${amountText}</small></label>
-      <label>QB account name<input data-qb-account-name="${field.key}" value="${escapeHtml(mapping.accountName || '')}" placeholder="Example: Payroll Expense"></label>
-      <label>QB account ID<input data-qb-account-id="${field.key}" value="${escapeHtml(mapping.accountId || '')}" placeholder="Paste QuickBooks Account ID"></label>
+      <label>QB account${accountControl}</label>
+      <label>Selected account name<input data-qb-account-name="${field.key}" value="${escapeHtml(mapping.accountName || '')}" placeholder="Auto-fills after choosing account"></label>
     </div>`;
   }).join('');
 
@@ -892,13 +1051,40 @@ function renderQuickBooksMappingPanel() {
   if (roleTarget) {
     roleTarget.innerHTML = PAYROLL_ROLES.map(role => {
       const mapping = quickBooksMapping.roleMappings[role] || {};
+      const classList = quickBooksResources.classes;
+      const classControl = classList.length
+        ? `<select data-qb-role-class-id="${role}">${quickBooksResourceOptionHtml(classList, mapping.classId, 'Choose QuickBooks class (optional)', mapping.className)}</select>`
+        : `<input data-qb-role-class-id="${role}" value="${escapeHtml(mapping.classId || '')}" placeholder="QB class ID optional">`;
       return `<div class="qb-role-map-row" data-qb-role-row="${role}">
         <span>${escapeHtml(PAYROLL_ROLE_LABELS[role] || role)}</span>
-        <input data-qb-role-class-name="${role}" value="${escapeHtml(mapping.className || '')}" placeholder="QB class name optional">
-        <input data-qb-role-class-id="${role}" value="${escapeHtml(mapping.classId || '')}" placeholder="QB class ID optional">
+        ${classControl}
+        <input data-qb-role-class-name="${role}" value="${escapeHtml(mapping.className || '')}" placeholder="Selected class name">
       </div>`;
     }).join('');
   }
+
+  $$('[data-qb-account-id]').forEach(control => {
+    control.onchange = event => {
+      const fieldKey = event.currentTarget.dataset.qbAccountId;
+      const resource = quickBooksSelectedResource(quickBooksResources.accounts, event.currentTarget.value);
+      const nameInput = $(`[data-qb-account-name="${fieldKey}"]`);
+      if (resource && nameInput) nameInput.value = resource.fullyQualifiedName || resource.displayName || resource.name;
+      quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
+      persistQuickBooksMapping();
+      renderQuickBooksMappingStatus();
+    };
+  });
+  $$('[data-qb-role-class-id]').forEach(control => {
+    control.onchange = event => {
+      const role = event.currentTarget.dataset.qbRoleClassId;
+      const resource = quickBooksSelectedResource(quickBooksResources.classes, event.currentTarget.value);
+      const nameInput = $(`[data-qb-role-class-name="${role}"]`);
+      if (resource && nameInput) nameInput.value = resource.fullyQualifiedName || resource.displayName || resource.name;
+      quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
+      persistQuickBooksMapping();
+      renderQuickBooksMappingStatus();
+    };
+  });
 
   renderQuickBooksMappingStatus();
 }
@@ -927,28 +1113,59 @@ function renderQuickBooksMappingStatus() {
   if (total) total.textContent = `Preview debit ${phpMoney(plan.debit)} · credit ${phpMoney(plan.credit)}${Math.abs(plan.difference) >= 0.01 ? ` · difference ${phpMoney(plan.difference)}` : ' · balanced'}`;
 }
 
-function fillQuickBooksEmployeeMapForm() {
+function fillQuickBooksEmployeeMapForm(preserveSelectedType = false) {
   const employeeId = $('#quickbooksEmployeeSelect')?.value;
   const mapping = quickBooksMapping.employeeMappings[employeeId] || {};
-  if ($('#quickbooksEmployeeQboName')) $('#quickbooksEmployeeQboName').value = mapping.quickbooksDisplayName || '';
-  if ($('#quickbooksEmployeeQboId')) $('#quickbooksEmployeeQboId').value = mapping.quickbooksNameId || '';
-  if ($('#quickbooksEmployeeQboType')) $('#quickbooksEmployeeQboType').value = mapping.quickbooksNameType || 'Employee';
+  const typeControl = $('#quickbooksEmployeeQboType');
+  const nameControl = $('#quickbooksEmployeeQboName');
+  const idControl = $('#quickbooksEmployeeQboId');
+  const selectedType = typeControl?.value || '';
+  const nameType = preserveSelectedType && QUICKBOOKS_NAME_TYPES.includes(selectedType)
+    ? selectedType
+    : QUICKBOOKS_NAME_TYPES.includes(mapping.quickbooksNameType)
+      ? mapping.quickbooksNameType
+      : (selectedType || 'Employee');
+  if (typeControl) typeControl.value = nameType;
+  if (idControl) {
+    const list = quickBooksNameResources(nameType);
+    if (idControl.tagName === 'SELECT') {
+      idControl.innerHTML = quickBooksResourceOptionHtml(list, mapping.quickbooksNameId || '', `Choose QuickBooks ${nameType}`, mapping.quickbooksDisplayName || '');
+      idControl.disabled = !list.length && nameType !== 'OtherName';
+      idControl.onchange = () => {
+        const resource = quickBooksSelectedResource(quickBooksNameResources($('#quickbooksEmployeeQboType')?.value || 'Employee'), idControl.value);
+        if (nameControl) nameControl.value = resource ? (resource.displayName || resource.fullyQualifiedName || resource.name) : '';
+      };
+    } else {
+      idControl.value = mapping.quickbooksNameId || '';
+    }
+  }
+  if (nameControl) nameControl.value = mapping.quickbooksDisplayName || '';
 }
 
 function readQuickBooksMappingForm() {
   const next = normalizeQuickBooksMapping(quickBooksMapping);
   QUICKBOOKS_ACCOUNT_FIELDS.forEach(field => {
+    const accountControl = $(`[data-qb-account-id="${field.key}"]`);
+    const selectedAccount = accountControl?.tagName === 'SELECT'
+      ? accountControl.selectedOptions?.[0]
+      : null;
+    const accountName = selectedAccount?.dataset?.name || $(`[data-qb-account-name="${field.key}"]`)?.value?.trim() || '';
     next.accountMappings[field.key] = {
       enabled: Boolean($(`[data-qb-account-enabled="${field.key}"]`)?.checked),
-      accountName: $(`[data-qb-account-name="${field.key}"]`)?.value?.trim() || '',
-      accountId: $(`[data-qb-account-id="${field.key}"]`)?.value?.trim() || '',
+      accountName,
+      accountId: accountControl?.value?.trim() || '',
       postingType: field.postingType
     };
   });
   PAYROLL_ROLES.forEach(role => {
+    const classControl = $(`[data-qb-role-class-id="${role}"]`);
+    const selectedClass = classControl?.tagName === 'SELECT'
+      ? classControl.selectedOptions?.[0]
+      : null;
+    const className = selectedClass?.dataset?.name || $(`[data-qb-role-class-name="${role}"]`)?.value?.trim() || '';
     next.roleMappings[role] = {
-      className: $(`[data-qb-role-class-name="${role}"]`)?.value?.trim() || '',
-      classId: $(`[data-qb-role-class-id="${role}"]`)?.value?.trim() || '',
+      className,
+      classId: classControl?.value?.trim() || '',
       departmentName: '',
       departmentId: ''
     };
@@ -989,10 +1206,19 @@ async function saveQuickBooksEmployeeMapping() {
   const employeeId = $('#quickbooksEmployeeSelect')?.value;
   if (!employeeId) return showToast('Choose an employee to map.');
   quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
-  const nameId = $('#quickbooksEmployeeQboId')?.value?.trim() || '';
-  const displayName = $('#quickbooksEmployeeQboName')?.value?.trim() || '';
+  const idControl = $('#quickbooksEmployeeQboId');
+  const nameId = idControl?.value?.trim() || '';
+  const selectedOption = idControl?.tagName === 'SELECT' ? idControl.selectedOptions?.[0] : null;
+  const displayName = selectedOption?.dataset?.name || $('#quickbooksEmployeeQboName')?.value?.trim() || '';
   const nameType = $('#quickbooksEmployeeQboType')?.value || 'Employee';
   if (nameId || displayName) {
+    const duplicate = Object.entries(quickBooksMapping.employeeMappings || {}).find(([otherId, mapping]) => (
+      otherId !== employeeId
+      && mapping?.quickbooksNameId
+      && mapping.quickbooksNameId === nameId
+      && (mapping.quickbooksNameType || 'Employee') === nameType
+    ));
+    if (duplicate) return showToast('That QuickBooks employee/name is already mapped to another Sync2Time employee.');
     quickBooksMapping.employeeMappings[employeeId] = {
       quickbooksNameId: nameId,
       quickbooksDisplayName: displayName,
@@ -1007,7 +1233,10 @@ async function saveQuickBooksEmployeeMapping() {
 }
 
 function exportQuickBooksMapping() {
-  const blob = new Blob([JSON.stringify(quickBooksMapping, null, 2)], { type: 'application/json;charset=utf-8' });
+  const blob = new Blob([JSON.stringify({
+    mapping: quickBooksMapping,
+    fetchedQuickBooksLists: quickBooksResources
+  }, null, 2)], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -1503,6 +1732,10 @@ async function loadSupabaseSettings() {
   if (sharedSettings.quickbooks_payroll_mapping) {
     quickBooksMapping = normalizeQuickBooksMapping(sharedSettings.quickbooks_payroll_mapping);
     persistQuickBooksMapping();
+  }
+  if (sharedSettings.quickbooks_resources_cache) {
+    quickBooksResources = normalizeQuickBooksResources(sharedSettings.quickbooks_resources_cache);
+    persistQuickBooksResources();
   }
   if (!paystubEmailTemplates.some(template => template.id === selectedPaystubEmailTemplateId)) {
     selectedPaystubEmailTemplateId = paystubEmailTemplates[0]?.id || '';
@@ -5371,8 +5604,8 @@ async function sendApprovedPaystubs() {
 }
 
 function appReturnUrl() {
-  if (location.protocol === 'http:' || location.protocol === 'https:') return `${location.origin}${location.pathname}#payroll`;
-  return 'https://time.sync2va.com/#payroll';
+  if (location.protocol === 'http:' || location.protocol === 'https:') return `${location.origin}${location.pathname}#integration`;
+  return 'https://time.sync2va.com/#integration';
 }
 
 function handleQuickBooksReturnNotice() {
@@ -5382,7 +5615,7 @@ function handleQuickBooksReturnNotice() {
   const params = new URLSearchParams(queryString || '');
   const status = params.get('quickbooks');
   if (!status) return;
-  if (pageHash.replace('#', '') !== 'payroll') location.hash = '#payroll';
+  if (pageHash.replace('#', '') !== 'integration') location.hash = '#integration';
   if (status === 'connected') {
     quickBooksStatus = {
       checked: true,
@@ -5402,7 +5635,7 @@ function handleQuickBooksReturnNotice() {
     showToast(`QuickBooks connection error: ${quickBooksStatus.error}`);
   }
   renderQuickBooksPanel();
-  if (history.replaceState) history.replaceState(null, document.title, `${location.pathname}${pageHash || '#payroll'}`);
+  if (history.replaceState) history.replaceState(null, document.title, `${location.pathname}${pageHash || '#integration'}`);
   showPage();
 }
 
@@ -5819,7 +6052,7 @@ function cardKeyAction(event, callback) {
 
 function showPage() {
   const page = (location.hash || '#today').slice(1);
-  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'adjustments', 'team', 'approvals', 'ai-alerts', 'audit'];
+  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'integration', 'adjustments', 'team', 'approvals', 'ai-alerts', 'audit'];
   const employeeAllowed = ['today', 'hours', 'calendar', 'documents', 'requests'];
   const allowed = currentAccount?.role === 'employee' ? employeeAllowed : adminAllowed;
   const active = allowed.includes(page) ? page : 'today';
@@ -5829,6 +6062,7 @@ function showPage() {
   if (active === 'projects') renderProjects();
   if (active === 'reports') renderReports();
   if (active === 'payroll') renderPayroll();
+  if (active === 'integration') renderQuickBooksPanel();
   if (active === 'adjustments') renderAdjustmentCenter();
   if (active === 'team') renderTeamDirectory();
   if (active === 'approvals') renderApprovals();
@@ -6784,6 +7018,7 @@ if ($('#sendSampleBulkEmail')) $('#sendSampleBulkEmail').onclick = sendSampleBul
 if ($('#quickbooksRefresh')) $('#quickbooksRefresh').onclick = () => refreshQuickBooksStatus(true);
 if ($('#quickbooksConnect')) $('#quickbooksConnect').onclick = connectQuickBooks;
 if ($('#quickbooksSyncPayroll')) $('#quickbooksSyncPayroll').onclick = syncApprovedPayrollToQuickBooks;
+if ($('#quickbooksFetchResources')) $('#quickbooksFetchResources').onclick = fetchQuickBooksResources;
 if ($('#quickbooksSaveMapping')) $('#quickbooksSaveMapping').onclick = () => saveQuickBooksMapping(true);
 if ($('#quickbooksValidateMapping')) $('#quickbooksValidateMapping').onclick = () => {
   quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
@@ -6793,7 +7028,8 @@ if ($('#quickbooksValidateMapping')) $('#quickbooksValidateMapping').onclick = (
   showToast(issues.length ? `Mapping issue: ${issues[0]}` : 'QuickBooks mapping looks ready.');
 };
 if ($('#quickbooksExportMapping')) $('#quickbooksExportMapping').onclick = exportQuickBooksMapping;
-if ($('#quickbooksEmployeeSelect')) $('#quickbooksEmployeeSelect').onchange = fillQuickBooksEmployeeMapForm;
+if ($('#quickbooksEmployeeSelect')) $('#quickbooksEmployeeSelect').onchange = () => fillQuickBooksEmployeeMapForm(false);
+if ($('#quickbooksEmployeeQboType')) $('#quickbooksEmployeeQboType').onchange = () => fillQuickBooksEmployeeMapForm(true);
 if ($('#quickbooksSaveEmployeeMap')) $('#quickbooksSaveEmployeeMap').onclick = saveQuickBooksEmployeeMapping;
 $('#managePaystubTemplates').onclick = () => openPaystubEmailEditor();
 $('#paystubEmailForm').onsubmit = openManualPaystubGmail;
