@@ -157,6 +157,26 @@ let editingPayrollAdjustment = null;
 let editingQuickHoursRow = null;
 let quickBooksStatus = { checked: false, connected: false, message: 'QuickBooks status has not been checked yet.' };
 let quickBooksSyncInProgress = false;
+const QUICKBOOKS_MAPPING_STORAGE_KEY = 'sync2time-quickbooks-payroll-mapping';
+const QUICKBOOKS_ACCOUNT_FIELDS = [
+  { key: 'grossPay', label: 'Gross Pay', source: 'Gross PHP pay', postingType: 'Debit', required: true, defaultEnabled: true },
+  { key: 'holidayPay', label: 'Holiday Pay', source: 'Holiday pay', postingType: 'Debit', required: false, defaultEnabled: true },
+  { key: 'commission', label: 'Commission', source: 'Commission', postingType: 'Debit', required: false, defaultEnabled: true },
+  { key: 'otherEarnings', label: 'Other Earnings', source: 'Other earnings', postingType: 'Debit', required: false, defaultEnabled: true },
+  { key: 'positiveAdjustment', label: 'Positive Adjustment', source: 'Manual adjustment above 0', postingType: 'Debit', required: false, defaultEnabled: true },
+  { key: 'netPay', label: 'Net Pay / Payroll Payable', source: 'Net pay', postingType: 'Credit', required: true, defaultEnabled: true },
+  { key: 'quickDeduction', label: 'Hour / Amount Deduction', source: 'Deducted hours and amount', postingType: 'Credit', required: false, defaultEnabled: true },
+  { key: 'manualDeductions', label: 'Manual Deductions', source: 'Deductions', postingType: 'Credit', required: false, defaultEnabled: true },
+  { key: 'sss', label: 'SSS Payable', source: 'SSS', postingType: 'Credit', required: false, defaultEnabled: true },
+  { key: 'philHealth', label: 'PhilHealth Payable', source: 'PhilHealth', postingType: 'Credit', required: false, defaultEnabled: true },
+  { key: 'pagibig', label: 'Pag-IBIG Payable', source: 'Pag-IBIG', postingType: 'Credit', required: false, defaultEnabled: true },
+  { key: 'bankFees', label: 'Bank Fees', source: 'Bank fees', postingType: 'Credit', required: false, defaultEnabled: true },
+  { key: 'otherDeductions', label: 'Other Deduction', source: 'Other deduction', postingType: 'Credit', required: false, defaultEnabled: true },
+  { key: 'negativeAdjustment', label: 'Negative Adjustment', source: 'Manual adjustment below 0', postingType: 'Credit', required: false, defaultEnabled: true },
+  { key: 'balancing', label: 'Auto-balance / Unmapped Remainder', source: 'Safety balancing line', postingType: 'Auto', required: false, defaultEnabled: true }
+];
+const QUICKBOOKS_NAME_TYPES = ['Employee', 'Vendor', 'Customer', 'OtherName'];
+let quickBooksMapping = normalizeQuickBooksMapping(JSON.parse(localStorage.getItem(QUICKBOOKS_MAPPING_STORAGE_KEY) || 'null'));
 let quickHoursDrafts = [];
 let deletedNoticeRepairAttempted = false;
 let approvedTimeEditRepairAttempted = false;
@@ -675,6 +695,328 @@ function persistPaystubRecipients() {
   localStorage.setItem('sync2time-paystub-recipients', JSON.stringify(paystubRecipients));
 }
 
+function defaultQuickBooksMapping() {
+  return {
+    version: 1,
+    enabled: true,
+    accountMappings: Object.fromEntries(QUICKBOOKS_ACCOUNT_FIELDS.map(field => [field.key, {
+      enabled: Boolean(field.defaultEnabled),
+      accountId: '',
+      accountName: '',
+      postingType: field.postingType
+    }])),
+    employeeMappings: {},
+    roleMappings: Object.fromEntries(PAYROLL_ROLES.map(role => [role, {
+      classId: '',
+      className: '',
+      departmentId: '',
+      departmentName: ''
+    }])),
+    updatedAt: null
+  };
+}
+
+function normalizeQuickBooksMapping(value) {
+  const base = defaultQuickBooksMapping();
+  if (!value || typeof value !== 'object') return base;
+  const incomingAccounts = value.accountMappings && typeof value.accountMappings === 'object' ? value.accountMappings : {};
+  QUICKBOOKS_ACCOUNT_FIELDS.forEach(field => {
+    const current = incomingAccounts[field.key] || {};
+    base.accountMappings[field.key] = {
+      enabled: current.enabled === undefined ? Boolean(field.defaultEnabled) : Boolean(current.enabled),
+      accountId: String(current.accountId || current.id || '').trim(),
+      accountName: String(current.accountName || current.name || '').trim(),
+      postingType: ['Debit', 'Credit', 'Auto'].includes(current.postingType) ? current.postingType : field.postingType
+    };
+  });
+  const incomingEmployees = value.employeeMappings && typeof value.employeeMappings === 'object' ? value.employeeMappings : {};
+  base.employeeMappings = Object.fromEntries(Object.entries(incomingEmployees).map(([employeeId, item]) => {
+    const record = item && typeof item === 'object' ? item : {};
+    return [employeeId, {
+      quickbooksNameId: String(record.quickbooksNameId || record.nameId || '').trim(),
+      quickbooksDisplayName: String(record.quickbooksDisplayName || record.displayName || '').trim(),
+      quickbooksNameType: QUICKBOOKS_NAME_TYPES.includes(record.quickbooksNameType) ? record.quickbooksNameType : 'Employee'
+    }];
+  }));
+  const incomingRoles = value.roleMappings && typeof value.roleMappings === 'object' ? value.roleMappings : {};
+  PAYROLL_ROLES.forEach(role => {
+    const current = incomingRoles[role] || {};
+    base.roleMappings[role] = {
+      classId: String(current.classId || '').trim(),
+      className: String(current.className || '').trim(),
+      departmentId: String(current.departmentId || '').trim(),
+      departmentName: String(current.departmentName || '').trim()
+    };
+  });
+  base.enabled = value.enabled === undefined ? true : Boolean(value.enabled);
+  base.updatedAt = value.updatedAt || null;
+  return base;
+}
+
+function persistQuickBooksMapping() {
+  localStorage.setItem(QUICKBOOKS_MAPPING_STORAGE_KEY, JSON.stringify(quickBooksMapping));
+}
+
+function quickBooksPayrollFieldAmount(row, key) {
+  const value = (...keys) => keys.map(name => Number(row[name] || 0)).find(number => Number.isFinite(number) && number !== 0) || 0;
+  switch (key) {
+    case 'grossPay': return Math.max(0, value('grossPhp', 'grossPayPhp'));
+    case 'holidayPay': return Math.max(0, value('holidayPayPhp'));
+    case 'commission': return Math.max(0, value('commission', 'commissionPhp'));
+    case 'otherEarnings': return Math.max(0, value('otherEarnings', 'otherEarningsPhp'));
+    case 'positiveAdjustment': return Math.max(0, value('adjustment', 'adjustmentPhp'));
+    case 'netPay': return Math.max(0, value('netPay', 'netPayPhp'));
+    case 'quickDeduction': return Math.max(0, value('quickDeductionPhp'));
+    case 'manualDeductions': return Math.max(0, -value('deductions', 'deductionsPhp'));
+    case 'sss': return Math.max(0, value('statutorySssPhp'));
+    case 'philHealth': return Math.max(0, value('statutoryPhilHealthPhp'));
+    case 'pagibig': return Math.max(0, value('statutoryPagibigPhp'));
+    case 'bankFees': return Math.max(0, value('bankFees', 'bankFeesPhp'));
+    case 'otherDeductions': return Math.max(0, value('otherDeductions', 'otherDeductionsPhp'));
+    case 'negativeAdjustment': return Math.max(0, -value('adjustment', 'adjustmentPhp'));
+    default: return 0;
+  }
+}
+
+function quickBooksAccountFieldTotals(rows) {
+  return Object.fromEntries(QUICKBOOKS_ACCOUNT_FIELDS.map(field => {
+    if (field.key === 'balancing') return [field.key, 0];
+    return [field.key, Number(rows.reduce((sum, row) => sum + quickBooksPayrollFieldAmount(row, field.key), 0).toFixed(2))];
+  }));
+}
+
+function quickBooksMappingLinePlan(rows = buildQuickBooksPayrollRows()) {
+  const totals = quickBooksAccountFieldTotals(rows);
+  const lines = [];
+  let debit = 0;
+  let credit = 0;
+  QUICKBOOKS_ACCOUNT_FIELDS.filter(field => field.key !== 'balancing').forEach(field => {
+    const amount = Number(totals[field.key] || 0);
+    const mapping = quickBooksMapping.accountMappings[field.key] || {};
+    if (!(amount > 0) || !mapping.enabled || !mapping.accountId) return;
+    const postingType = field.postingType === 'Auto' ? 'Debit' : field.postingType;
+    if (postingType === 'Debit') debit += amount;
+    else credit += amount;
+    lines.push({
+      key: field.key,
+      label: field.label,
+      postingType,
+      amount,
+      accountId: mapping.accountId,
+      accountName: mapping.accountName
+    });
+  });
+  const difference = Number((debit - credit).toFixed(2));
+  const balancing = quickBooksMapping.accountMappings.balancing || {};
+  if (Math.abs(difference) >= 0.01 && balancing.enabled && balancing.accountId) {
+    const postingType = difference > 0 ? 'Credit' : 'Debit';
+    const amount = Math.abs(difference);
+    lines.push({
+      key: 'balancing',
+      label: 'Auto-balance / Unmapped Remainder',
+      postingType,
+      amount,
+      accountId: balancing.accountId,
+      accountName: balancing.accountName
+    });
+    if (postingType === 'Debit') debit += amount;
+    else credit += amount;
+  }
+  return {
+    lines,
+    totals,
+    debit: Number(debit.toFixed(2)),
+    credit: Number(credit.toFixed(2)),
+    difference: Number((debit - credit).toFixed(2))
+  };
+}
+
+function quickBooksMappingIssues(rows = buildQuickBooksPayrollRows()) {
+  const issues = [];
+  const totals = quickBooksAccountFieldTotals(rows);
+  QUICKBOOKS_ACCOUNT_FIELDS.filter(field => field.key !== 'balancing').forEach(field => {
+    const mapping = quickBooksMapping.accountMappings[field.key] || {};
+    const amount = Number(totals[field.key] || 0);
+    if (field.required && !mapping.accountId) issues.push(`${field.label} needs a QuickBooks account ID.`);
+    if (mapping.enabled && amount > 0 && !mapping.accountId) issues.push(`${field.label} has ${phpMoney(amount)} but no QuickBooks account ID.`);
+  });
+  const plan = quickBooksMappingLinePlan(rows);
+  const balancing = quickBooksMapping.accountMappings.balancing || {};
+  if (Math.abs(plan.difference) >= 0.01 && !balancing.accountId) {
+    issues.push(`Journal is off by ${phpMoney(Math.abs(plan.difference))}. Add an Auto-balance account or map every non-zero field.`);
+  }
+  return [...new Set(issues)];
+}
+
+function quickBooksMappingWarnings(rows = buildQuickBooksPayrollRows()) {
+  const warnings = [];
+  const missingEmployees = rows.filter(row => !quickBooksMapping.employeeMappings[row.person.id]?.quickbooksNameId);
+  if (missingEmployees.length) warnings.push(`${missingEmployees.length} employee${missingEmployees.length === 1 ? '' : 's'} do not have a QuickBooks name mapping yet. Sync will still work, but those journal lines will not be tagged to a QB employee/vendor/customer.`);
+  return warnings;
+}
+
+function renderQuickBooksMappingPanel() {
+  const accountTarget = $('#quickbooksAccountMappings');
+  if (!accountTarget) return;
+  const rows = buildQuickBooksPayrollRows();
+  const totals = quickBooksAccountFieldTotals(rows);
+  accountTarget.innerHTML = QUICKBOOKS_ACCOUNT_FIELDS.map(field => {
+    const mapping = quickBooksMapping.accountMappings[field.key] || {};
+    const total = Number(totals[field.key] || 0);
+    const amountText = field.key === 'balancing' ? 'Used only if needed' : phpMoney(total);
+    return `<div class="qb-map-row" data-qb-account-row="${field.key}">
+      <label class="qb-toggle"><input type="checkbox" data-qb-account-enabled="${field.key}" ${mapping.enabled ? 'checked' : ''}> ${escapeHtml(field.label)}${field.required ? ' *' : ''}<small>${escapeHtml(field.source)} · ${escapeHtml(field.postingType)} · ${amountText}</small></label>
+      <label>QB account name<input data-qb-account-name="${field.key}" value="${escapeHtml(mapping.accountName || '')}" placeholder="Example: Payroll Expense"></label>
+      <label>QB account ID<input data-qb-account-id="${field.key}" value="${escapeHtml(mapping.accountId || '')}" placeholder="Paste QuickBooks Account ID"></label>
+    </div>`;
+  }).join('');
+
+  const employeeSelect = $('#quickbooksEmployeeSelect');
+  if (employeeSelect) {
+    const selected = employeeSelect.value || rows[0]?.person.id || '';
+    employeeSelect.innerHTML = rows.map(row => `<option value="${row.person.id}">${escapeHtml(row.person.name)} — ${escapeHtml(PAYROLL_ROLE_LABELS[row.payrollRole] || row.payrollRole)}</option>`).join('');
+    employeeSelect.value = rows.some(row => row.person.id === selected) ? selected : rows[0]?.person.id || '';
+    fillQuickBooksEmployeeMapForm();
+  }
+
+  const employeeRows = $('#quickbooksEmployeeMappingRows');
+  if (employeeRows) {
+    employeeRows.innerHTML = rows.map(row => {
+      const mapping = quickBooksMapping.employeeMappings[row.person.id] || {};
+      const status = mapping.quickbooksNameId ? `${escapeHtml(mapping.quickbooksDisplayName || 'Mapped')} · ${escapeHtml(mapping.quickbooksNameType || 'Employee')} #${escapeHtml(mapping.quickbooksNameId)}` : 'Not mapped yet';
+      return `<div class="qb-employee-map-row"><span>${escapeHtml(row.person.name)}<small>${escapeHtml(row.person.role)} · ${escapeHtml(row.person.email || '')}</small></span><b>${status}</b></div>`;
+    }).join('') || '<div class="empty-state">No payroll employees available for this cutoff.</div>';
+  }
+
+  const roleTarget = $('#quickbooksRoleMappings');
+  if (roleTarget) {
+    roleTarget.innerHTML = PAYROLL_ROLES.map(role => {
+      const mapping = quickBooksMapping.roleMappings[role] || {};
+      return `<div class="qb-role-map-row" data-qb-role-row="${role}">
+        <span>${escapeHtml(PAYROLL_ROLE_LABELS[role] || role)}</span>
+        <input data-qb-role-class-name="${role}" value="${escapeHtml(mapping.className || '')}" placeholder="QB class name optional">
+        <input data-qb-role-class-id="${role}" value="${escapeHtml(mapping.classId || '')}" placeholder="QB class ID optional">
+      </div>`;
+    }).join('');
+  }
+
+  renderQuickBooksMappingStatus();
+}
+
+function renderQuickBooksMappingStatus() {
+  const rows = buildQuickBooksPayrollRows();
+  const issues = quickBooksMappingIssues(rows);
+  const warnings = quickBooksMappingWarnings(rows);
+  const plan = quickBooksMappingLinePlan(rows);
+  const status = $('#quickbooksMappingStatus');
+  if (status) {
+    status.className = issues.length ? 'qb-map-status error' : warnings.length ? 'qb-map-status warning' : 'qb-map-status ok';
+    status.innerHTML = issues.length
+      ? `<b>Mapping not ready</b><span>${issues.map(escapeHtml).join('<br>')}</span>`
+      : warnings.length
+        ? `<b>Mapping usable with warning</b><span>${warnings.map(escapeHtml).join('<br>')}</span>`
+        : '<b>Mapping ready</b><span>Required QuickBooks accounts are mapped and the journal plan is balanced.</span>';
+  }
+  const preview = $('#quickbooksMappingPreview');
+  if (preview) {
+    preview.innerHTML = plan.lines.length
+      ? plan.lines.map(line => `<div><span>${escapeHtml(line.postingType)} · ${escapeHtml(line.label)}</span><b>${phpMoney(line.amount)}</b><small>${escapeHtml(line.accountName || 'QB account')} #${escapeHtml(line.accountId)}</small></div>`).join('')
+      : '<div><span>No mapped journal lines yet.</span><b>₱0.00</b><small>Add account IDs above.</small></div>';
+  }
+  const total = $('#quickbooksMappingTotals');
+  if (total) total.textContent = `Preview debit ${phpMoney(plan.debit)} · credit ${phpMoney(plan.credit)}${Math.abs(plan.difference) >= 0.01 ? ` · difference ${phpMoney(plan.difference)}` : ' · balanced'}`;
+}
+
+function fillQuickBooksEmployeeMapForm() {
+  const employeeId = $('#quickbooksEmployeeSelect')?.value;
+  const mapping = quickBooksMapping.employeeMappings[employeeId] || {};
+  if ($('#quickbooksEmployeeQboName')) $('#quickbooksEmployeeQboName').value = mapping.quickbooksDisplayName || '';
+  if ($('#quickbooksEmployeeQboId')) $('#quickbooksEmployeeQboId').value = mapping.quickbooksNameId || '';
+  if ($('#quickbooksEmployeeQboType')) $('#quickbooksEmployeeQboType').value = mapping.quickbooksNameType || 'Employee';
+}
+
+function readQuickBooksMappingForm() {
+  const next = normalizeQuickBooksMapping(quickBooksMapping);
+  QUICKBOOKS_ACCOUNT_FIELDS.forEach(field => {
+    next.accountMappings[field.key] = {
+      enabled: Boolean($(`[data-qb-account-enabled="${field.key}"]`)?.checked),
+      accountName: $(`[data-qb-account-name="${field.key}"]`)?.value?.trim() || '',
+      accountId: $(`[data-qb-account-id="${field.key}"]`)?.value?.trim() || '',
+      postingType: field.postingType
+    };
+  });
+  PAYROLL_ROLES.forEach(role => {
+    next.roleMappings[role] = {
+      className: $(`[data-qb-role-class-name="${role}"]`)?.value?.trim() || '',
+      classId: $(`[data-qb-role-class-id="${role}"]`)?.value?.trim() || '',
+      departmentName: '',
+      departmentId: ''
+    };
+  });
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+async function saveQuickBooksMapping(showFeedback = true) {
+  const previous = quickBooksMapping;
+  quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
+  persistQuickBooksMapping();
+  renderQuickBooksMappingPanel();
+  renderQuickBooksPanel();
+  if (usesSupabase() && currentProfile?.role === 'admin') {
+    try {
+      await saveSupabaseSetting('quickbooks_payroll_mapping', quickBooksMapping);
+      if (showFeedback) showToast('QuickBooks mapping saved and synced.');
+    } catch (error) {
+      if (isMissingAppSettingsError(error)) {
+        settingsTableMissing = true;
+        if (showFeedback) showToast('QuickBooks mapping saved in this browser. Run outputs/sync2time-quickbooks-mapping-sql.sql in Supabase to sync it for every admin.');
+        return;
+      }
+      quickBooksMapping = previous;
+      persistQuickBooksMapping();
+      renderQuickBooksMappingPanel();
+      renderQuickBooksPanel();
+      showToast(`QuickBooks mapping save error: ${error.message || 'unknown error'}`);
+      return;
+    }
+  } else if (showFeedback) {
+    showToast('QuickBooks mapping saved in this browser. Sign in as admin with Supabase to sync it for everyone.');
+  }
+}
+
+async function saveQuickBooksEmployeeMapping() {
+  const employeeId = $('#quickbooksEmployeeSelect')?.value;
+  if (!employeeId) return showToast('Choose an employee to map.');
+  quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
+  const nameId = $('#quickbooksEmployeeQboId')?.value?.trim() || '';
+  const displayName = $('#quickbooksEmployeeQboName')?.value?.trim() || '';
+  const nameType = $('#quickbooksEmployeeQboType')?.value || 'Employee';
+  if (nameId || displayName) {
+    quickBooksMapping.employeeMappings[employeeId] = {
+      quickbooksNameId: nameId,
+      quickbooksDisplayName: displayName,
+      quickbooksNameType: QUICKBOOKS_NAME_TYPES.includes(nameType) ? nameType : 'Employee'
+    };
+  } else {
+    delete quickBooksMapping.employeeMappings[employeeId];
+  }
+  persistQuickBooksMapping();
+  await saveQuickBooksMapping(false);
+  showToast('Employee QuickBooks name mapping saved.');
+}
+
+function exportQuickBooksMapping() {
+  const blob = new Blob([JSON.stringify(quickBooksMapping, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `sync2time-quickbooks-mapping-${isoDate(new Date())}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast('QuickBooks mapping exported.');
+}
+
 async function saveSupabaseProject(projectName) {
   if (!usesSupabase() || currentProfile?.role !== 'admin') throw new Error('Admin Supabase session required.');
   const position = taskOptions.length;
@@ -1158,6 +1500,10 @@ async function loadSupabaseSettings() {
     paystubEmailTemplates = normalizePaystubEmailTemplates(sharedTemplates);
     localStorage.setItem('sync2time-paystub-email-templates', JSON.stringify(paystubEmailTemplates));
   }
+  if (sharedSettings.quickbooks_payroll_mapping) {
+    quickBooksMapping = normalizeQuickBooksMapping(sharedSettings.quickbooks_payroll_mapping);
+    persistQuickBooksMapping();
+  }
   if (!paystubEmailTemplates.some(template => template.id === selectedPaystubEmailTemplateId)) {
     selectedPaystubEmailTemplateId = paystubEmailTemplates[0]?.id || '';
   }
@@ -1483,6 +1829,7 @@ function subscribeSupabaseRealtime() {
       await loadSupabaseSettings();
       renderPayroll();
       renderAdjustmentCenter();
+      renderQuickBooksMappingPanel();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
       await loadSupabaseProfiles();
@@ -5124,9 +5471,12 @@ function renderQuickBooksPanel() {
   const approvedRows = rows.filter(row => row.paystubApproved);
   const totalNet = rows.reduce((sum, row) => sum + Number(row.netPay || 0), 0);
   const missingApprovals = rows.filter(row => !row.paystubApproved);
+  const mappingIssues = quickBooksMappingIssues(rows);
+  const mappingWarnings = quickBooksMappingWarnings(rows);
   const connectButton = $('#quickbooksConnect');
   const refreshButton = $('#quickbooksRefresh');
   const syncButton = $('#quickbooksSyncPayroll');
+  renderQuickBooksMappingPanel();
 
   if (!usesSupabase()) {
     statusEl.textContent = 'Sign in with the Supabase admin account before connecting QuickBooks.';
@@ -5148,6 +5498,10 @@ function renderQuickBooksPanel() {
     noteEl.textContent = 'No payroll rows are available for this cutoff yet.';
   } else if (missingApprovals.length) {
     noteEl.textContent = `${approvedRows.length} of ${rows.length} paystubs approved. Missing approval: ${missingApprovals.slice(0, 4).map(row => row.person.name).join(', ')}${missingApprovals.length > 4 ? '...' : ''}.`;
+  } else if (mappingIssues.length) {
+    noteEl.textContent = `QuickBooks mapping is not ready: ${mappingIssues[0]}`;
+  } else if (mappingWarnings.length) {
+    noteEl.textContent = `${rows.length} approved employees are ready. Warning: ${mappingWarnings[0]}`;
   } else {
     noteEl.textContent = `${rows.length} approved employees are ready to sync as accounting journal lines. Total net pay: ${phpMoney(totalNet)}.`;
   }
@@ -5155,7 +5509,7 @@ function renderQuickBooksPanel() {
   if (connectButton) connectButton.disabled = quickBooksSyncInProgress;
   if (refreshButton) refreshButton.disabled = quickBooksSyncInProgress;
   if (syncButton) {
-    syncButton.disabled = quickBooksSyncInProgress || !quickBooksStatus.connected || !rows.length || Boolean(missingApprovals.length);
+    syncButton.disabled = quickBooksSyncInProgress || !quickBooksStatus.connected || !rows.length || Boolean(missingApprovals.length) || Boolean(mappingIssues.length);
     syncButton.textContent = quickBooksSyncInProgress ? 'Syncing...' : 'Sync approved cutoff';
   }
 }
@@ -5222,6 +5576,8 @@ async function syncApprovedPayrollToQuickBooks() {
   if (missingApprovals.length) {
     return showToast(`Approve every paystub first. Missing: ${missingApprovals.slice(0, 4).map(row => row.person.name).join(', ')}${missingApprovals.length > 4 ? '...' : ''}`);
   }
+  const mappingIssues = quickBooksMappingIssues(rows);
+  if (mappingIssues.length) return showToast(`QuickBooks mapping is not ready: ${mappingIssues[0]}`);
 
   const { start, end, payDateKey } = payrollRange();
   const totalNetPayPhp = Number(rows.reduce((sum, row) => sum + Number(row.netPay || 0), 0).toFixed(2));
@@ -5242,6 +5598,8 @@ async function syncApprovedPayrollToQuickBooks() {
       totalNetPayPhp,
       employeeCount: rows.length,
       roleSummary: quickBooksRoleSummary(rows),
+      quickbooksMapping: quickBooksMapping,
+      mappingPreview: quickBooksMappingLinePlan(rows),
       rows: quickBooksPayloadRows(rows)
     };
     if (button) button.textContent = 'Sending to QuickBooks...';
@@ -6426,6 +6784,17 @@ if ($('#sendSampleBulkEmail')) $('#sendSampleBulkEmail').onclick = sendSampleBul
 if ($('#quickbooksRefresh')) $('#quickbooksRefresh').onclick = () => refreshQuickBooksStatus(true);
 if ($('#quickbooksConnect')) $('#quickbooksConnect').onclick = connectQuickBooks;
 if ($('#quickbooksSyncPayroll')) $('#quickbooksSyncPayroll').onclick = syncApprovedPayrollToQuickBooks;
+if ($('#quickbooksSaveMapping')) $('#quickbooksSaveMapping').onclick = () => saveQuickBooksMapping(true);
+if ($('#quickbooksValidateMapping')) $('#quickbooksValidateMapping').onclick = () => {
+  quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
+  persistQuickBooksMapping();
+  renderQuickBooksMappingStatus();
+  const issues = quickBooksMappingIssues();
+  showToast(issues.length ? `Mapping issue: ${issues[0]}` : 'QuickBooks mapping looks ready.');
+};
+if ($('#quickbooksExportMapping')) $('#quickbooksExportMapping').onclick = exportQuickBooksMapping;
+if ($('#quickbooksEmployeeSelect')) $('#quickbooksEmployeeSelect').onchange = fillQuickBooksEmployeeMapForm;
+if ($('#quickbooksSaveEmployeeMap')) $('#quickbooksSaveEmployeeMap').onclick = saveQuickBooksEmployeeMapping;
 $('#managePaystubTemplates').onclick = () => openPaystubEmailEditor();
 $('#paystubEmailForm').onsubmit = openManualPaystubGmail;
 $('#paystubEmailClose').onclick = closePaystubEmailEditor;

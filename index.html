@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260722-frozen-add-deduct-2" />
+  <link rel="stylesheet" href="styles.css?v=20260722-qbo-mapping-1" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -189,6 +189,29 @@
           <button class="start-btn" id="quickbooksSyncPayroll" type="button">Sync approved cutoff</button>
         </div>
       </div>
+      <div class="quickbooks-mapping-card" id="quickbooksMappingCard">
+        <div class="qb-map-header">
+          <div><p class="eyebrow">MANUAL QUICKBOOKS MAPPING</p><h3>Choose where Sync2Time payroll fields go in QuickBooks</h3><p>Type or paste the QuickBooks account/name IDs you want to use. Sync2Time validates the mapping before it sends the journal entry.</p></div>
+          <div class="qb-map-actions"><button class="secondary" id="quickbooksValidateMapping" type="button">Validate preview</button><button class="secondary" id="quickbooksExportMapping" type="button">Export mapping</button><button class="start-btn" id="quickbooksSaveMapping" type="button">Save mapping</button></div>
+        </div>
+        <div class="qb-map-status" id="quickbooksMappingStatus"><b>Mapping not checked yet</b><span>Save or validate the mapping before syncing approved payroll.</span></div>
+        <h4>1. Account mapping</h4>
+        <div class="qb-account-mappings" id="quickbooksAccountMappings"></div>
+        <h4>2. Employee / name mapping</h4>
+        <div class="qb-employee-map-editor">
+          <label>Sync2Time employee<select id="quickbooksEmployeeSelect"></select></label>
+          <label>QB name type<select id="quickbooksEmployeeQboType"><option>Employee</option><option>Vendor</option><option>Customer</option><option>OtherName</option></select></label>
+          <label>QB display name<input id="quickbooksEmployeeQboName" placeholder="Example: Claudine San Juan"></label>
+          <label>QB name ID<input id="quickbooksEmployeeQboId" placeholder="Paste QuickBooks Employee/Vendor/Customer ID"></label>
+          <button class="secondary" id="quickbooksSaveEmployeeMap" type="button">Save employee map</button>
+        </div>
+        <div class="qb-employee-mapping-rows" id="quickbooksEmployeeMappingRows"></div>
+        <h4>3. Optional role/class mapping</h4>
+        <div class="qb-role-mappings" id="quickbooksRoleMappings"></div>
+        <h4>Journal preview</h4>
+        <p class="qb-map-total" id="quickbooksMappingTotals">Preview not calculated yet.</p>
+        <div class="qb-journal-preview" id="quickbooksMappingPreview"></div>
+      </div>
       <div class="bulk-paystub-card"><div><p class="eyebrow">PAYSTUB APPROVAL STATUS</p><h3 id="bulkPaystubTitle">Approve employees before manual Gmail sending</h3><p id="bulkPaystubStatus">0 of 0 employees approved.</p></div><div class="bulk-paystub-actions"><button class="secondary" id="sendEmployeeSamplePaystubs" type="button">Send sample emails</button><button class="start-btn" id="sendPaystubs" type="button" disabled>Use row Email</button></div></div>
       <div class="manual-email-card"><div><p class="eyebrow">MANUAL GOOGLE EMAIL</p><h3>Send paystubs one employee at a time</h3><p>Use the Email button beside an employee. Sync2Time downloads the correct PDF and opens an editable Gmail draft from hr@sync2va.com.</p></div><button class="secondary" id="managePaystubTemplates" type="button">Manage email templates</button></div>
       <div class="sample-bulk-email-card"><div><p class="eyebrow">BULK EMAIL TEST</p><h3>Sample bulk email checker</h3><p id="sampleBulkEmailPreview">Select a payroll tab to preview the sample email source.</p></div><label>Send sample to<input id="sampleBulkEmailRecipient" type="email" value="hr@sync2va.com"></label><button class="secondary" id="sendSampleBulkEmail" type="button">Send sample email</button></div>
@@ -342,6 +365,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260722-frozen-add-deduct-2"></script>
+  <script src="app.js?v=20260722-qbo-mapping-1"></script>
 </body>
 </html>
