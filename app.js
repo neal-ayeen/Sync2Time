@@ -169,6 +169,17 @@ const LONG_SESSION_SECONDS = 3 * 60 * 60;
 const LONG_SESSION_RESPONSE_SECONDS = 60;
 let scheduleFilter = 'checked-in';
 let selectedProject = 'All';
+const WIDE_TABLE_SCROLL_SELECTORS = [
+  '.adjustment-center-scroll',
+  '.attendance-card',
+  '.project-list-card',
+  '.team-list-card',
+  '.ai-alert-card',
+  '.audit-card',
+  '.schedule-card',
+  '.live-team-card',
+  '.payroll-table-scroll'
+];
 let calendarCursor = businessMonthCursor(todayDate);
 let leaveCalendarCursor = businessMonthCursor(todayDate);
 let phpUsdRate = Number(localStorage.getItem('minute-php-usd-rate')) || FALLBACK_PHP_USD;
@@ -3633,6 +3644,78 @@ function exportAdjustmentCenter() {
   exportCsv(`sync2time-additions-deductions-${isoDate(start)}-to-${isoDate(end)}.csv`, csv, 'Additions and deductions exported.');
 }
 
+let horizontalScrollControlCounter = 0;
+let horizontalScrollQueued = false;
+
+function visibleElement(element) {
+  return Boolean(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
+}
+
+function labelForWideScroller(scroller) {
+  const section = scroller.closest('section');
+  const heading = section?.querySelector('.section-title h2, h2, h3')?.textContent?.trim();
+  if (heading) return heading;
+  if (scroller.classList.contains('adjustment-center-scroll')) return 'Add/Deduct table';
+  if (scroller.classList.contains('payroll-table-scroll')) return 'Payroll table';
+  if (scroller.classList.contains('team-list-card')) return 'Team table';
+  if (scroller.classList.contains('audit-card')) return 'Audit log';
+  return 'This table';
+}
+
+function needsHorizontalControls(scroller) {
+  if (!visibleElement(scroller)) return false;
+  const ownOverflow = scroller.scrollWidth > scroller.clientWidth + 8;
+  const widestChild = [...scroller.children].reduce((width, child) => Math.max(width, child.scrollWidth || child.clientWidth || 0), 0);
+  return ownOverflow || widestChild > scroller.clientWidth + 8;
+}
+
+function updateHorizontalControlState(scroller, controls) {
+  if (!controls) return;
+  const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  controls.querySelector('[data-scroll-left]').disabled = scroller.scrollLeft <= 2;
+  controls.querySelector('[data-scroll-right]').disabled = scroller.scrollLeft >= maxScroll - 2;
+}
+
+function ensureHorizontalScrollControls() {
+  horizontalScrollQueued = false;
+  const seen = new Set();
+  WIDE_TABLE_SCROLL_SELECTORS.forEach(selector => {
+    $$(selector).forEach(scroller => {
+      if (!scroller || seen.has(scroller)) return;
+      seen.add(scroller);
+      const existingPayrollControls = scroller.previousElementSibling?.classList?.contains('payroll-scroll-controls') ? scroller.previousElementSibling : null;
+      const needed = needsHorizontalControls(scroller);
+      scroller.classList.toggle('wide-scrollable', needed);
+      if (existingPayrollControls) {
+        existingPayrollControls.hidden = !needed;
+        return;
+      }
+      if (!scroller.dataset.scrollControlId) scroller.dataset.scrollControlId = `wide-scroll-${++horizontalScrollControlCounter}`;
+      let controls = scroller.previousElementSibling?.dataset?.scrollControlsFor === scroller.dataset.scrollControlId
+        ? scroller.previousElementSibling
+        : null;
+      if (!controls) {
+        controls = document.createElement('div');
+        controls.className = 'table-scroll-controls';
+        controls.dataset.scrollControlsFor = scroller.dataset.scrollControlId;
+        controls.innerHTML = `<button class="secondary" type="button" data-scroll-left>← Left</button><span>${escapeHtml(labelForWideScroller(scroller))} has more columns. Use these buttons anytime.</span><button class="secondary" type="button" data-scroll-right>Right →</button>`;
+        controls.querySelector('[data-scroll-left]').onclick = () => scroller.scrollBy({ left: -Math.max(420, scroller.clientWidth * 0.65), behavior: 'smooth' });
+        controls.querySelector('[data-scroll-right]').onclick = () => scroller.scrollBy({ left: Math.max(420, scroller.clientWidth * 0.65), behavior: 'smooth' });
+        scroller.parentElement?.insertBefore(controls, scroller);
+        scroller.addEventListener('scroll', () => updateHorizontalControlState(scroller, controls), { passive: true });
+      }
+      controls.hidden = !needed;
+      updateHorizontalControlState(scroller, controls);
+    });
+  });
+}
+
+function queueHorizontalScrollControls() {
+  if (horizontalScrollQueued) return;
+  horizontalScrollQueued = true;
+  requestAnimationFrame(ensureHorizontalScrollControls);
+}
+
 function sampleBulkEmailRows() {
   return currentPayrollRows;
 }
@@ -5367,6 +5450,7 @@ function showPage() {
   renderDeletedTimeAlerts();
   renderEmployeePayrollAdjustments();
   renderEmployeeHoursReport();
+  queueHorizontalScrollControls();
 }
 
 function applyAccess(account) {
@@ -6324,6 +6408,13 @@ $('#paystubEmailTemplate').onchange = event => {
 $('#newPaystubEmailTemplate').onclick = addPaystubEmailTemplate;
 $('#savePaystubEmailTemplate').onclick = savePaystubEmailTemplate;
 $('#deletePaystubEmailTemplate').onclick = deletePaystubEmailTemplate;
+window.addEventListener('resize', queueHorizontalScrollControls);
+if ($('main')) {
+  new MutationObserver(queueHorizontalScrollControls).observe($('main'), {
+    childList: true,
+    subtree: true
+  });
+}
 
 function csvCell(value) {
   return `"${String(value ?? '').replaceAll('"', '""')}"`;
