@@ -3672,8 +3672,35 @@ function needsHorizontalControls(scroller) {
 function updateHorizontalControlState(scroller, controls) {
   if (!controls) return;
   const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
-  controls.querySelector('[data-scroll-left]').disabled = scroller.scrollLeft <= 2;
-  controls.querySelector('[data-scroll-right]').disabled = scroller.scrollLeft >= maxScroll - 2;
+  const leftButton = controls.querySelector('[data-scroll-left], #payrollScrollLeft');
+  const rightButton = controls.querySelector('[data-scroll-right], #payrollScrollRight');
+  const mirror = controls.querySelector('[data-scroll-mirror]');
+  const mirrorWidth = controls.querySelector('[data-scroll-mirror-width]');
+  if (mirrorWidth) mirrorWidth.style.width = `${Math.max(scroller.scrollWidth, scroller.clientWidth)}px`;
+  if (mirror && Math.abs(mirror.scrollLeft - scroller.scrollLeft) > 1) mirror.scrollLeft = scroller.scrollLeft;
+  if (leftButton) leftButton.disabled = scroller.scrollLeft <= 2;
+  if (rightButton) rightButton.disabled = scroller.scrollLeft >= maxScroll - 2;
+}
+
+function ensureTopScrollbar(scroller, controls) {
+  let mirror = controls.querySelector('[data-scroll-mirror]');
+  if (!mirror) {
+    mirror = document.createElement('div');
+    mirror.className = 'table-scrollbar-mirror';
+    mirror.dataset.scrollMirror = 'true';
+    mirror.innerHTML = '<div data-scroll-mirror-width></div>';
+    controls.appendChild(mirror);
+    mirror.addEventListener('scroll', () => {
+      if (Math.abs(scroller.scrollLeft - mirror.scrollLeft) > 1) scroller.scrollLeft = mirror.scrollLeft;
+    }, { passive: true });
+  }
+  updateHorizontalControlState(scroller, controls);
+}
+
+function bindHorizontalScrollControls(scroller, controls) {
+  if (controls.dataset.scrollBoundTo === scroller.dataset.scrollControlId) return;
+  controls.dataset.scrollBoundTo = scroller.dataset.scrollControlId;
+  scroller.addEventListener('scroll', () => updateHorizontalControlState(scroller, controls), { passive: true });
 }
 
 function ensureHorizontalScrollControls() {
@@ -3683,14 +3710,18 @@ function ensureHorizontalScrollControls() {
     $$(selector).forEach(scroller => {
       if (!scroller || seen.has(scroller)) return;
       seen.add(scroller);
-      const existingPayrollControls = scroller.previousElementSibling?.classList?.contains('payroll-scroll-controls') ? scroller.previousElementSibling : null;
       const needed = needsHorizontalControls(scroller);
       scroller.classList.toggle('wide-scrollable', needed);
+      if (!scroller.dataset.scrollControlId) scroller.dataset.scrollControlId = `wide-scroll-${++horizontalScrollControlCounter}`;
+      const existingPayrollControls = scroller.previousElementSibling?.classList?.contains('payroll-scroll-controls') ? scroller.previousElementSibling : null;
       if (existingPayrollControls) {
         existingPayrollControls.hidden = !needed;
+        if (needed) {
+          bindHorizontalScrollControls(scroller, existingPayrollControls);
+          ensureTopScrollbar(scroller, existingPayrollControls);
+        }
         return;
       }
-      if (!scroller.dataset.scrollControlId) scroller.dataset.scrollControlId = `wide-scroll-${++horizontalScrollControlCounter}`;
       let controls = scroller.previousElementSibling?.dataset?.scrollControlsFor === scroller.dataset.scrollControlId
         ? scroller.previousElementSibling
         : null;
@@ -3698,14 +3729,16 @@ function ensureHorizontalScrollControls() {
         controls = document.createElement('div');
         controls.className = 'table-scroll-controls';
         controls.dataset.scrollControlsFor = scroller.dataset.scrollControlId;
-        controls.innerHTML = `<button class="secondary" type="button" data-scroll-left>← Left</button><span>${escapeHtml(labelForWideScroller(scroller))} has more columns. Use these buttons anytime.</span><button class="secondary" type="button" data-scroll-right>Right →</button>`;
+        controls.innerHTML = `<div class="table-scroll-control-row"><button class="secondary" type="button" data-scroll-left>← Left</button><span>${escapeHtml(labelForWideScroller(scroller))} has more columns. Use the scrollbar below or these buttons anytime.</span><button class="secondary" type="button" data-scroll-right>Right →</button></div>`;
         controls.querySelector('[data-scroll-left]').onclick = () => scroller.scrollBy({ left: -Math.max(420, scroller.clientWidth * 0.65), behavior: 'smooth' });
         controls.querySelector('[data-scroll-right]').onclick = () => scroller.scrollBy({ left: Math.max(420, scroller.clientWidth * 0.65), behavior: 'smooth' });
         scroller.parentElement?.insertBefore(controls, scroller);
-        scroller.addEventListener('scroll', () => updateHorizontalControlState(scroller, controls), { passive: true });
       }
       controls.hidden = !needed;
-      updateHorizontalControlState(scroller, controls);
+      if (needed) {
+        bindHorizontalScrollControls(scroller, controls);
+        ensureTopScrollbar(scroller, controls);
+      }
     });
   });
 }
