@@ -3618,6 +3618,57 @@ function payrollRange() {
   return { start: businessStartFromKey(startKey), end: businessEndFromKey(endKey), startKey, endKey, payDateKey };
 }
 
+function quickBooksSyncRange() {
+  const now = new Date();
+  const period = $('#quickbooksSyncPeriod')?.value || 'current';
+  let startKey;
+  let endKey;
+  let payDateKey;
+  if (period === 'previous') {
+    ({ startKey, endKey, payDateKey } = currentCutoffKeys(now, true));
+  } else if (period === 'custom') {
+    startKey = $('#quickbooksSyncStart')?.value || isoDate(payrollRange().start);
+    endKey = $('#quickbooksSyncEnd')?.value || isoDate(payrollRange().end);
+    if (startKey > endKey) [startKey, endKey] = [endKey, startKey];
+    payDateKey = endKey;
+  } else {
+    ({ startKey, endKey, payDateKey } = currentCutoffKeys(now, false));
+  }
+  return {
+    start: businessStartFromKey(startKey),
+    end: businessEndFromKey(endKey),
+    startKey,
+    endKey,
+    payDateKey,
+    period
+  };
+}
+
+function syncQuickBooksDatesFromPeriod() {
+  if (!$('#quickbooksSyncPeriod') || !$('#quickbooksSyncStart') || !$('#quickbooksSyncEnd')) return;
+  const period = $('#quickbooksSyncPeriod').value || 'current';
+  if (period !== 'custom') {
+    const range = quickBooksSyncRange();
+    $('#quickbooksSyncStart').value = range.startKey;
+    $('#quickbooksSyncEnd').value = range.endKey;
+  } else {
+    if (!$('#quickbooksSyncStart').value || !$('#quickbooksSyncEnd').value) {
+      const range = payrollRange();
+      $('#quickbooksSyncStart').value = range.startKey;
+      $('#quickbooksSyncEnd').value = range.endKey;
+    }
+    if ($('#quickbooksSyncStart').value > $('#quickbooksSyncEnd').value) {
+      $('#quickbooksSyncEnd').value = $('#quickbooksSyncStart').value;
+    }
+  }
+  const range = quickBooksSyncRange();
+  const note = $('#quickbooksSyncRangeNote');
+  if (note) {
+    const label = period === 'previous' ? 'Previous cutoff' : period === 'custom' ? 'Custom dates' : 'Current cutoff';
+    note.textContent = `${label}: ${businessDateLabel(range.start)} to ${businessDateLabel(range.end)}. Journal date: ${businessDateLabel(businessDateFromKey(range.payDateKey || range.endKey))}.`;
+  }
+}
+
 function payrollRole(person) {
   if (person?.payrollRoleOverride) return person.payrollRoleOverride;
   const role = String(person.role || '').toLowerCase();
@@ -5785,8 +5836,9 @@ function handleQuickBooksReturnNotice() {
   showPage();
 }
 
-function buildQuickBooksPayrollRows() {
-  return PAYROLL_ROLES.flatMap(role => buildPayrollRows(role).map(row => ({ ...row, payrollRole: role })));
+function buildQuickBooksPayrollRows(rangeOverride = null) {
+  const range = rangeOverride || quickBooksSyncRange();
+  return PAYROLL_ROLES.flatMap(role => buildPayrollRows(role, range).map(row => ({ ...row, payrollRole: role })));
 }
 
 function quickBooksRoleSummary(rows) {
@@ -5802,7 +5854,8 @@ function quickBooksRoleSummary(rows) {
   }).filter(item => item.employeeCount > 0);
 }
 
-function quickBooksPayloadRows(rows) {
+function quickBooksPayloadRows(rows, rangeOverride = null) {
+  const range = rangeOverride || quickBooksSyncRange();
   return rows.map(row => ({
     employeeId: row.person.id,
     assignmentKey: row.assignmentKey || 'primary',
@@ -5818,7 +5871,7 @@ function quickBooksPayloadRows(rows) {
     pendingOtHours: Number(row.pendingOtHours || 0),
     rejectedOtHours: Number(row.rejectedOtHours || 0),
     usdHourlyRate: Number(row.hourlyUsd || 0),
-    phpRate: Number(payrollUsdPhpRate() || 0),
+    phpRate: Number(payrollUsdPhpRate(range.start, range.end) || 0),
     grossUsd: Number(row.grossUsd || 0),
     grossPhp: Number(row.grossPhp || 0),
     calculatedHolidayPayPhp: Number(row.calculatedHolidayPayPhp || 0),
@@ -5846,6 +5899,8 @@ function renderQuickBooksPanel() {
   const statusEl = $('#quickbooksStatus');
   const noteEl = $('#quickbooksSyncNote');
   if (!statusEl || !noteEl) return;
+  syncQuickBooksDatesFromPeriod();
+  const range = quickBooksSyncRange();
   const rows = buildQuickBooksPayrollRows();
   const approvedRows = rows.filter(row => row.paystubApproved);
   const totalNet = rows.reduce((sum, row) => sum + Number(row.netPay || 0), 0);
@@ -5874,22 +5929,22 @@ function renderQuickBooksPanel() {
   }
 
   if (!rows.length) {
-    noteEl.textContent = 'No payroll rows are available for this cutoff yet.';
+    noteEl.textContent = `No payroll rows are available for ${businessDateLabel(range.start)} to ${businessDateLabel(range.end)} yet.`;
   } else if (missingApprovals.length) {
-    noteEl.textContent = `${approvedRows.length} of ${rows.length} paystubs approved. Missing approval: ${missingApprovals.slice(0, 4).map(row => row.person.name).join(', ')}${missingApprovals.length > 4 ? '...' : ''}.`;
+    noteEl.textContent = `${approvedRows.length} of ${rows.length} paystubs approved for ${businessDateLabel(range.start)} to ${businessDateLabel(range.end)}. Missing approval: ${missingApprovals.slice(0, 4).map(row => row.person.name).join(', ')}${missingApprovals.length > 4 ? '...' : ''}.`;
   } else if (mappingIssues.length) {
     noteEl.textContent = `QuickBooks mapping is not ready: ${mappingIssues[0]}`;
   } else if (mappingWarnings.length) {
     noteEl.textContent = `${rows.length} approved employees are ready. Warning: ${mappingWarnings[0]}`;
   } else {
-    noteEl.textContent = `${rows.length} approved employees are ready to sync as accounting journal lines. Total net pay: ${phpMoney(totalNet)}.`;
+    noteEl.textContent = `${rows.length} approved employees are ready for one QuickBooks Journal Entry covering ${businessDateLabel(range.start)} to ${businessDateLabel(range.end)}. Total net pay: ${phpMoney(totalNet)}.`;
   }
 
   if (connectButton) connectButton.disabled = quickBooksSyncInProgress;
   if (refreshButton) refreshButton.disabled = quickBooksSyncInProgress;
   if (syncButton) {
     syncButton.disabled = quickBooksSyncInProgress || !quickBooksStatus.connected || !rows.length || Boolean(missingApprovals.length) || Boolean(mappingIssues.length);
-    syncButton.textContent = quickBooksSyncInProgress ? 'Syncing...' : 'Sync approved cutoff';
+    syncButton.textContent = quickBooksSyncInProgress ? 'Syncing...' : 'Sync selected dates';
   }
 }
 
@@ -5945,12 +6000,14 @@ async function connectQuickBooks() {
 
 async function syncApprovedPayrollToQuickBooks() {
   if (!usesSupabase()) return showToast('Supabase admin login is required before QuickBooks sync.');
+  syncQuickBooksDatesFromPeriod();
+  const range = quickBooksSyncRange();
   let status = quickBooksStatus;
   if (!status.connected) status = await refreshQuickBooksStatus(false);
   if (!status.connected) return showToast(status.error || status.message || 'Connect QuickBooks before syncing payroll.');
 
-  const rows = buildQuickBooksPayrollRows();
-  if (!rows.length) return showToast('No payroll rows are available for this cutoff.');
+  const rows = buildQuickBooksPayrollRows(range);
+  if (!rows.length) return showToast(`No payroll rows are available for ${businessDateLabel(range.start)} to ${businessDateLabel(range.end)}.`);
   const missingApprovals = rows.filter(row => !row.paystubApproved);
   if (missingApprovals.length) {
     return showToast(`Approve every paystub first. Missing: ${missingApprovals.slice(0, 4).map(row => row.person.name).join(', ')}${missingApprovals.length > 4 ? '...' : ''}`);
@@ -5958,28 +6015,28 @@ async function syncApprovedPayrollToQuickBooks() {
   const mappingIssues = quickBooksMappingIssues(rows);
   if (mappingIssues.length) return showToast(`QuickBooks mapping is not ready: ${mappingIssues[0]}`);
 
-  const { start, end, payDateKey } = payrollRange();
+  const { start, end, startKey, endKey, payDateKey } = range;
   const totalNetPayPhp = Number(rows.reduce((sum, row) => sum + Number(row.netPay || 0), 0).toFixed(2));
   if (!(totalNetPayPhp > 0)) return showToast('The approved net pay total is zero, so nothing will be sent to QuickBooks.');
-  if (!confirm(`Sync ${rows.length} approved employee pay lines to QuickBooks for ${businessDateLabel(start)} to ${businessDateLabel(end)}?\n\nThis creates one accounting Journal Entry only. It does not run QuickBooks Payroll.\n\nTotal net pay: ${phpMoney(totalNetPayPhp)}.`)) return;
+  if (!confirm(`Sync ${rows.length} approved employee pay lines to QuickBooks for ${businessDateLabel(start)} to ${businessDateLabel(end)}?\n\nThis creates ONE detailed accounting Journal Entry only. It does not run QuickBooks Payroll.\n\nTotal net pay: ${phpMoney(totalNetPayPhp)}.`)) return;
 
   const button = $('#quickbooksSyncPayroll');
   quickBooksSyncInProgress = true;
   renderQuickBooksPanel();
   try {
     const payload = {
-      periodStart: isoDate(start),
-      periodEnd: isoDate(end),
-      payDate: payDateKey,
+      periodStart: startKey,
+      periodEnd: endKey,
+      payDate: payDateKey || endKey,
       roleScope: 'all',
-      fxRate: payrollUsdPhpRate(),
+      fxRate: payrollUsdPhpRate(start, end),
       totalGrossPhp: Number(rows.reduce((sum, row) => sum + Number(row.grossPhp || 0), 0).toFixed(2)),
       totalNetPayPhp,
       employeeCount: rows.length,
       roleSummary: quickBooksRoleSummary(rows),
       quickbooksMapping: quickBooksMapping,
       mappingPreview: quickBooksMappingLinePlan(rows),
-      rows: quickBooksPayloadRows(rows)
+      rows: quickBooksPayloadRows(rows, range)
     };
     if (button) button.textContent = 'Sending to QuickBooks...';
     const result = await invokeEdgeFunction('quickbooks-sync-payroll', payload);
@@ -7164,6 +7221,23 @@ if ($('#sendSampleBulkEmail')) $('#sendSampleBulkEmail').onclick = sendSampleBul
 if ($('#quickbooksRefresh')) $('#quickbooksRefresh').onclick = () => refreshQuickBooksStatus(true);
 if ($('#quickbooksConnect')) $('#quickbooksConnect').onclick = connectQuickBooks;
 if ($('#quickbooksSyncPayroll')) $('#quickbooksSyncPayroll').onclick = syncApprovedPayrollToQuickBooks;
+if ($('#quickbooksSyncPeriod')) {
+  $('#quickbooksSyncPeriod').onchange = () => {
+    syncQuickBooksDatesFromPeriod();
+    renderQuickBooksPanel();
+  };
+}
+['quickbooksSyncStart', 'quickbooksSyncEnd'].forEach(id => {
+  const input = $(`#${id}`);
+  if (input) input.onchange = () => {
+    if ($('#quickbooksSyncPeriod')) $('#quickbooksSyncPeriod').value = 'custom';
+    if ($('#quickbooksSyncStart')?.value && $('#quickbooksSyncEnd')?.value && $('#quickbooksSyncStart').value > $('#quickbooksSyncEnd').value) {
+      if (id === 'quickbooksSyncStart') $('#quickbooksSyncEnd').value = $('#quickbooksSyncStart').value;
+      else $('#quickbooksSyncStart').value = $('#quickbooksSyncEnd').value;
+    }
+    renderQuickBooksPanel();
+  };
+});
 if ($('#quickbooksFetchResources')) $('#quickbooksFetchResources').onclick = fetchQuickBooksResources;
 if ($('#quickbooksSaveMapping')) $('#quickbooksSaveMapping').onclick = () => saveQuickBooksMapping(true);
 if ($('#quickbooksValidateMapping')) $('#quickbooksValidateMapping').onclick = () => {
