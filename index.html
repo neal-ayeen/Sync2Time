@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260721-dual-role-1" />
+  <link rel="stylesheet" href="styles.css?v=20260721-holiday-adjustments-1" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -33,6 +33,7 @@
       <a class="nav-item admin-only" href="#projects"><span>◒</span> Projects</a>
       <a class="nav-item admin-only" href="#reports"><span>▤</span> Reports</a>
       <a class="nav-item admin-only" href="#payroll"><span>$</span> Payroll</a>
+      <a class="nav-item admin-only" href="#adjustments"><span>±</span> Add/Deduct</a>
       <a class="nav-item admin-only" href="#team"><span>♧</span> Team</a>
       <a class="nav-item admin-only" href="#approvals"><span>✓</span> Approvals</a>
       <a class="nav-item admin-only" href="#ai-alerts"><span>AI</span> AI Alerts</a>
@@ -193,6 +194,24 @@
       <div class="sample-bulk-email-card"><div><p class="eyebrow">BULK EMAIL TEST</p><h3>Sample bulk email checker</h3><p id="sampleBulkEmailPreview">Select a payroll tab to preview the sample email source.</p></div><label>Send sample to<input id="sampleBulkEmailRecipient" type="email" value="hr@sync2va.com"></label><button class="secondary" id="sendSampleBulkEmail" type="button">Send sample email</button></div>
     </section>
 
+    <section class="adjustments-center-section admin-only" id="adjustments">
+      <div class="section-title"><div><p class="eyebrow">ADDITIONAL PAY &amp; DEDUCTIONS</p><h2>Manual payroll entries by cutoff</h2><p>Review gross pay, holiday pay, commissions, other earnings, and deductions for the selected dates.</p></div><button class="export" id="adjustmentCenterExport" type="button">⇩ Export add/deduct</button></div>
+      <div class="payroll-toolbar">
+        <label class="filter-label">PERIOD <select id="adjustmentsPeriod"><option value="current">Current cutoff</option><option value="previous">Previous cutoff</option><option value="custom">Custom date</option></select></label>
+        <label class="filter-label">FROM <input id="adjustmentsStart" type="date"></label>
+        <label class="filter-label">TO <input id="adjustmentsEnd" type="date"></label>
+        <label class="search"><span>⌕</span><input id="adjustmentSearch" placeholder="Search employee"></label>
+      </div>
+      <div class="payroll-summary adjustment-center-summary"><article><span>ACTUAL HOURS</span><b id="adjustmentCenterActualHours">0h 00m</b></article><article><span>GROSS PAY</span><b id="adjustmentCenterGross">₱0.00</b></article><article><span>HOLIDAY PAY</span><b id="adjustmentCenterHoliday">₱0.00</b></article><article><span>NET PAY</span><b id="adjustmentCenterNet">₱0.00</b></article></div>
+      <div class="adjustment-center-card">
+        <div class="adjustment-center-scroll">
+          <div class="adjustment-center-head"><span>EMPLOYEE</span><span>ACTUAL HOURS</span><span>GROSS PAY</span><span>HOLIDAY PAY</span><span>COMMISSION</span><span>OTHER EARNINGS</span><span>DEDUCTIONS</span><span>PAG-IBIG</span><span>PHILHEALTH</span><span>SSS</span><span>BANK FEES</span><span>OTHER DEDUCTION</span><span>NET PAY</span><span>NOTES</span><span>ACTION</span></div>
+          <div id="adjustmentCenterRows"></div>
+        </div>
+        <div class="report-footer"><span id="adjustmentCenterRange">Select a period</span><span>Holiday pay is calculated first, but every amount here can be edited by admin.</span></div>
+      </div>
+    </section>
+
     <section class="team-section" id="team">
       <div class="section-title"><div><p class="eyebrow">TEAM DIRECTORY</p><h2>All employees</h2><p>Roster details, assigned shifts, rates, and access status.</p></div><button class="start-btn" id="teamAddEmployee">+ Add employee</button></div>
       <div class="team-list-card"><div class="team-list-head"><span>EMPLOYEE</span><span>ROLE &amp; DEPARTMENT</span><span>SHIFT</span><span>RATE</span><span>ACCESS</span><span>ACTION</span></div><div id="teamRows"></div><div class="report-footer"><span id="teamDirectoryCount">0 employees</span><span>Clocked-in employees can be clocked out by admin</span></div></div>
@@ -323,6 +342,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260721-dual-role-1"></script>
+  <script src="app.js?v=20260721-holiday-adjustments-1"></script>
 </body>
 </html>

@@ -129,6 +129,7 @@ let selectedPaystubEmailTemplateId = localStorage.getItem('sync2time-paystub-ema
 let emailingPayrollRow = null;
 let currentReportRows = [];
 let currentPayrollRows = [];
+let currentAdjustmentRows = [];
 let currentEmployeeReportRows = [];
 let selectedPayrollRole = 'coaches';
 const PAYROLL_ROLES = ['coaches', 'admin', 'webinar', 'smm', 'other'];
@@ -1452,6 +1453,7 @@ async function refreshSupabaseData() {
   renderDeletedTimeAlerts();
   renderReports();
   renderPayroll();
+  renderAdjustmentCenter();
   renderAiAlerts();
   renderAuditLog();
   renderEmployeeHoursReport();
@@ -1469,6 +1471,7 @@ function subscribeSupabaseRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, async () => {
       await loadSupabaseSettings();
       renderPayroll();
+      renderAdjustmentCenter();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
       await loadSupabaseProfiles();
@@ -1480,6 +1483,7 @@ function subscribeSupabaseRealtime() {
       renderProjects();
       renderReports();
       renderPayroll();
+      renderAdjustmentCenter();
       renderEmployeeRequests();
       render();
     })
@@ -1505,6 +1509,7 @@ function subscribeSupabaseRealtime() {
       renderScheduleWatch();
       renderTeamDirectory();
       renderReports();
+      renderAdjustmentCenter();
       renderAiAlerts();
       renderAuditLog();
       render();
@@ -1514,6 +1519,7 @@ function subscribeSupabaseRealtime() {
       await loadPayrollAdjustmentEvents();
       renderReports();
       renderPayroll();
+      renderAdjustmentCenter();
       renderEmployeePayrollAdjustments();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'payroll_adjustment_events' }, async () => {
@@ -1528,6 +1534,7 @@ function subscribeSupabaseRealtime() {
       await loadOvertimeAlerts();
       renderAiAlerts();
       renderPayroll();
+      renderAdjustmentCenter();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'leave_requests' }, async () => {
       await loadSupabaseRequests();
@@ -1546,6 +1553,7 @@ function subscribeSupabaseRealtime() {
       renderApprovals();
       renderEmployeeRequests();
       renderPayroll();
+      renderAdjustmentCenter();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'coaching_documents' }, async () => {
       await loadSupabaseDocuments();
@@ -2605,8 +2613,15 @@ function renderEmployeePayrollAdjustments() {
     const adjustmentPhp = Number(item.adjustment_php ?? item.adjustmentPhp ?? 0);
     const deductionsPhp = Number(item.deductions_php ?? item.deductionsPhp ?? 0);
     const commissionPhp = Number(item.commission_php ?? item.commissionPhp ?? 0);
+    const holidayPayPhp = Number(item.holiday_pay_override ?? item.holidayPayOverride ?? 0);
+    const otherEarningsPhp = Number(item.other_earnings_php ?? item.otherEarningsPhp ?? 0);
+    const bankFeesPhp = Number(item.bank_fees_php ?? item.bankFeesPhp ?? 0);
+    const otherDeductionsPhp = Number(item.other_deductions_php ?? item.otherDeductionsPhp ?? 0);
+    const pagibigPhp = Number(item.statutory_pagibig_php ?? item.statutoryPagibigPhp ?? 0);
+    const philHealthPhp = Number(item.statutory_philhealth_php ?? item.statutoryPhilHealthPhp ?? 0);
+    const sssPhp = Number(item.statutory_sss_php ?? item.statutorySssPhp ?? 0);
     const payableOverride = payableHoursOverrideValue(item);
-    const details = `Current summary | Hour adjustment: ${signedHourLabel(hours)}${payableOverride !== null ? ` | Approved payable: ${payableOverride.toFixed(2)}h` : ''} | USD amount: ${money(amount)} | PHP adjustment: ${phpMoney(adjustmentPhp)} | Deductions: ${phpMoney(deductionsPhp)} | Commission: ${phpMoney(commissionPhp)}`;
+    const details = `Current summary | Hour adjustment: ${signedHourLabel(hours)}${payableOverride !== null ? ` | Approved payable: ${payableOverride.toFixed(2)}h` : ''} | USD amount: ${money(amount)} | Holiday: ${phpMoney(holidayPayPhp)} | PHP adjustment: ${phpMoney(adjustmentPhp)} | Other earnings: ${phpMoney(otherEarningsPhp)} | Deductions: ${phpMoney(deductionsPhp)} | Commission: ${phpMoney(commissionPhp)} | Pag-IBIG: ${phpMoney(pagibigPhp)} | PhilHealth: ${phpMoney(philHealthPhp)} | SSS: ${phpMoney(sssPhp)} | Bank fees: ${phpMoney(bankFeesPhp)} | Other deduction: ${phpMoney(otherDeductionsPhp)}`;
     return `<div class="payroll-adjustment-notice payroll-adjustment-summary-notice"><div><b>${escapeHtml(from)} to ${escapeHtml(to)}</b><small>${escapeHtml(details)}</small><small>${escapeHtml(item.note || 'No note provided')}</small></div><span class="access-state">Summary</span></div>`;
   }).join('');
   if (history.length) {
@@ -2759,10 +2774,15 @@ function renderReports() {
     const deductedHours = signedHoursFromAdjustment(adjustment, actualHours);
     const deductedAmount = Math.max(0, Number(adjustment?.deducted_amount ?? adjustment?.deductedAmount ?? 0));
     const commission = Math.max(0, Number(adjustment?.commission ?? 0));
+    const holidayPayPhp = Number(adjustment?.holiday_pay_override ?? adjustment?.holidayPayOverride ?? 0);
+    const otherEarningsPhp = Number(adjustment?.other_earnings_php ?? adjustment?.otherEarningsPhp ?? 0);
+    const manualDeductionsPhp = Number(adjustment?.deductions_php ?? adjustment?.deductionsPhp ?? 0);
+    const bankFeesPhp = Number(adjustment?.bank_fees_php ?? adjustment?.bankFeesPhp ?? 0);
+    const otherDeductionsPhp = Number(adjustment?.other_deductions_php ?? adjustment?.otherDeductionsPhp ?? 0);
     const rate = hourlyRate(row) || 0;
     const payableSeconds = payableOverride !== null ? Math.max(0, payableOverride * 3600) : Math.max(0, row.seconds - deductedHours * 3600);
     const netPay = Math.max(0, row.pay - deductedHours * rate - deductedAmount + commission);
-    return { ...row, adjustment, payableOverride, deductedHours, deductedAmount, commission, payableSeconds, netPay };
+    return { ...row, adjustment, payableOverride, deductedHours, deductedAmount, commission, holidayPayPhp, otherEarningsPhp, manualDeductionsPhp, bankFeesPhp, otherDeductionsPhp, payableSeconds, netPay };
   });
   currentReportRows = rows;
   $('#reportTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
@@ -2772,7 +2792,7 @@ function renderReports() {
   $('#reportPayDate').textContent = payDate ? businessDateLabel(payDate, { month: 'short', day: 'numeric' }) : 'N/A';
   $('#reportPayDateNote').textContent = payDate ? (businessDateFromKey(payDateKey) < businessDateFromKey(isoDate(todayDate)) ? 'Completed payroll date' : 'Scheduled payroll date') : 'Only applies to payroll cutoffs';
   $('#reportRows').innerHTML = rows.map(row => {
-    const adjustmentText = row.adjustment ? `${signedHourShort(row.deductedHours)} · -${money(row.deductedAmount)} · +${money(row.commission)}` : 'No adjustment';
+    const adjustmentText = row.adjustment ? `${signedHourShort(row.deductedHours)} · -${money(row.deductedAmount)} · +${money(row.commission)} · Holiday ${phpMoney(row.holidayPayPhp)} · Other earnings ${phpMoney(row.otherEarningsPhp)} · Deductions ${phpMoney(row.manualDeductionsPhp)} · Bank ${phpMoney(row.bankFeesPhp)} · Other deduction ${phpMoney(row.otherDeductionsPhp)}` : 'No adjustment';
     return `<div class="report-row payroll-report-row" role="button" tabindex="0" data-report-employee="${row.employeeId}" data-report-name="${encodeURIComponent(row.name)}"><div class="person"><span class="person-avatar" style="background:${row.color}">${row.initials}</span><span>${escapeHtml(row.name)}<small>${escapeHtml(row.role)}</small></span></div><span>${period === 'day' ? escapeHtml(row.date) : `${businessDateLabel(start)} - ${businessDateLabel(end)}`}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span class="adjustment-summary">${adjustmentText}<small>Payable: ${formatDuration(row.payableSeconds)}</small></span><span class="attendance-time">${money(row.netPay)}</span><button class="edit-adjustment-btn" data-edit-adjustment="${row.employeeId}">Edit</button></div>`;
   }).join('') || '<div class="empty-state">No worked hours found for this report.</div>';
   $('#reportRangeLabel').textContent = `Showing ${businessDateLabel(start)} to ${businessDateLabel(end)}`;
@@ -2922,14 +2942,18 @@ function scheduledHoursInRange(person, start, end) {
   let daily = person.scheduledEnd - person.scheduledStart;
   if (daily <= 0) daily += 1440;
   daily /= 60;
-  let workdays = 0;
+  let workUnits = 0;
   let cursor = businessDateFromKey(isoDate(start));
   const last = businessDateFromKey(isoDate(end));
   while (cursor <= last) {
-    if (cursor.getUTCDay() !== 0 && cursor.getUTCDay() !== 6) workdays++;
+    if (payrollRole(person) === 'admin') {
+      workUnits += adminWorkUnitForDate(cursor);
+    } else if (cursor.getUTCDay() !== 0 && cursor.getUTCDay() !== 6) {
+      workUnits++;
+    }
     cursor = addBusinessDays(cursor, 1);
   }
-  return daily * workdays;
+  return daily * workUnits;
 }
 
 function weekdayCount(start, end) {
@@ -2952,8 +2976,9 @@ function currentPayrollFxOverrideKey() {
   return payrollFxOverrideKey(start, end);
 }
 
-function payrollUsdPhpRate() {
-  const cutoffRate = Number(payrollFxOverrides[currentPayrollFxOverrideKey()]);
+function payrollUsdPhpRate(start = null, end = null) {
+  const key = start && end ? payrollFxOverrideKey(start, end) : currentPayrollFxOverrideKey();
+  const cutoffRate = Number(payrollFxOverrides[key]);
   return cutoffRate > 0 ? cutoffRate : (manualPayrollFxOverride > 0 ? manualPayrollFxOverride : (liveUsdPhpRate || 1 / phpUsdRate));
 }
 
@@ -3041,6 +3066,11 @@ function nullableMoneyValue(value) {
   return Number.isFinite(number) ? Math.max(0, number) : null;
 }
 
+function nonNegativeMoneyValue(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? Math.max(0, number) : 0;
+}
+
 function isMonthlyStatutoryCutoff(start, end) {
   return Number(isoDate(start).slice(8, 10)) === MONTHLY_STATUTORY_CUTOFF_DAYS.startDay
     && Number(isoDate(end).slice(8, 10)) === MONTHLY_STATUTORY_CUTOFF_DAYS.endDay;
@@ -3084,6 +3114,84 @@ function statutoryAdminDeductions(person, values, start, end) {
   };
 }
 
+function statutoryPayrollDeductions(person, values, start, end, role) {
+  const adminDeductions = statutoryAdminDeductions(person, values, start, end);
+  const hasManualStatutory = ['statutorySssOverride', 'statutoryPhilHealthOverride', 'statutoryPagibigOverride']
+    .some(key => values?.[key] !== null && values?.[key] !== undefined && values?.[key] !== '');
+  if (role === 'admin') return adminDeductions;
+  if (!hasManualStatutory) {
+    return { sss: 0, philHealth: 0, pagibig: 0, total: 0, appliesThisCutoff: false, fallback: { sss: 0, philHealth: 0, pagibig: 0 } };
+  }
+  const sss = nullableMoneyValue(values.statutorySssOverride) ?? 0;
+  const philHealth = nullableMoneyValue(values.statutoryPhilHealthOverride) ?? 0;
+  const pagibig = nullableMoneyValue(values.statutoryPagibigOverride) ?? 0;
+  return {
+    sss,
+    philHealth,
+    pagibig,
+    total: sss + philHealth + pagibig,
+    appliesThisCutoff: true,
+    fallback: { sss: 0, philHealth: 0, pagibig: 0 }
+  };
+}
+
+function holidayDatesInRange(start, end) {
+  const startKey = isoDate(start);
+  const endKey = isoDate(end);
+  return philippineHolidays2026
+    .filter(holiday => holiday.date >= startKey && holiday.date <= endKey)
+    .map(holiday => ({ ...holiday, dateObject: businessDateFromKey(holiday.date) }));
+}
+
+function adminWorkUnitForDate(date) {
+  const day = businessDateFromKey(isoDate(date)).getUTCDay();
+  if (day >= 1 && day <= 5) return 1;
+  if (day === 6) return 0.5;
+  return 0;
+}
+
+function adminWorkUnitsInRange(start, end) {
+  let units = 0;
+  let cursor = businessDateFromKey(isoDate(start));
+  const last = businessDateFromKey(isoDate(end));
+  while (cursor <= last) {
+    units += adminWorkUnitForDate(cursor);
+    cursor = addBusinessDays(cursor, 1);
+  }
+  return units;
+}
+
+function monthlyRateDailyValue(person, start) {
+  const monthlyPhp = typeof person?.rate === 'number' && person.rate >= 1000 ? Number(person.rate) : 0;
+  if (!monthlyPhp) return 0;
+  const monthStart = businessDateFromKey(`${isoDate(start).slice(0, 7)}-01`);
+  const monthEnd = businessDateFromKey(`${isoDate(start).slice(0, 7)}-${pad(businessMonthLastDay(Number(isoDate(start).slice(0, 4)), Number(isoDate(start).slice(5, 7))))}`);
+  return monthlyPhp / Math.max(1, adminWorkUnitsInRange(monthStart, monthEnd));
+}
+
+function holidayHoursFromEntries(entries) {
+  return entries.reduce((sum, entry) => {
+    if (!entry.clock_in) return sum;
+    const entryDate = businessDateFromKey(isoDate(new Date(entry.clock_in)));
+    if (!holidayForDate(entryDate)) return sum;
+    return sum + secondsBetween(entry.clock_in, entry.clock_out || Date.now()) / 3600;
+  }, 0);
+}
+
+function calculatedHolidayPay(person, role, entries, start, end, fx, hourlyUsd, monthlyPhp) {
+  if (role === 'coaches') {
+    return holidayHoursFromEntries(entries) * Number(hourlyUsd || 0) * Number(fx || 0);
+  }
+  if (role === 'admin' && monthlyPhp) {
+    const dailyRate = monthlyRateDailyValue(person, start);
+    return holidayDatesInRange(start, end).reduce((sum, holiday) => {
+      const unit = adminWorkUnitForDate(holiday.dateObject);
+      return sum + dailyRate * unit;
+    }, 0);
+  }
+  return 0;
+}
+
 function payrollAdjustmentValues(person, start, end) {
   const adjustment = adjustmentFor(payrollEntryEmployeeId(person), start, end, payrollAssignmentKey(person));
   return {
@@ -3094,6 +3202,10 @@ function payrollAdjustmentValues(person, start, end) {
     adjustment: Number(adjustment?.adjustment_php ?? adjustment?.adjustmentPhp ?? 0),
     deductions: Number(adjustment?.deductions_php ?? adjustment?.deductionsPhp ?? 0),
     commission: Number(adjustment?.commission_php ?? adjustment?.commissionPhp ?? adjustment?.commission ?? 0),
+    otherEarnings: Number(adjustment?.other_earnings_php ?? adjustment?.otherEarningsPhp ?? 0),
+    bankFees: nonNegativeMoneyValue(adjustment?.bank_fees_php ?? adjustment?.bankFeesPhp ?? 0),
+    otherDeductions: nonNegativeMoneyValue(adjustment?.other_deductions_php ?? adjustment?.otherDeductionsPhp ?? 0),
+    holidayPayOverride: adjustment?.holiday_pay_override ?? adjustment?.holidayPayOverride ?? null,
     cutoffPayOverride: adjustment?.cutoff_pay_override ?? adjustment?.cutoffPayOverride ?? null,
     grossPayOverride: adjustment?.gross_pay_override ?? adjustment?.grossPayOverride ?? null,
     statutorySssOverride: adjustment?.statutory_sss_php ?? adjustment?.statutorySssPhp ?? null,
@@ -3105,9 +3217,9 @@ function payrollAdjustmentValues(person, start, end) {
   };
 }
 
-function buildPayrollRows(role = selectedPayrollRole) {
-  const { start, end, startKey } = payrollRange();
-  const fx = payrollUsdPhpRate();
+function buildPayrollRows(role = selectedPayrollRole, rangeOverride = null) {
+  const { start, end, startKey } = rangeOverride || payrollRange();
+  const fx = payrollUsdPhpRate(start, end);
   return payrollRosterForRole(role).map(person => {
     const employeeId = payrollEntryEmployeeId(person);
     const entries = supabaseTimeEntries.filter(entry => {
@@ -3134,7 +3246,7 @@ function buildPayrollRows(role = selectedPayrollRole) {
     const cutoffPay = values.cutoffPayOverride === null ? calculatedCutoffPay : Number(values.cutoffPayOverride);
     const monthStart = businessDateFromKey(`${startKey.slice(0, 7)}-01`);
     const monthEnd = businessDateFromKey(`${startKey.slice(0, 7)}-${pad(businessMonthLastDay(Number(startKey.slice(0, 4)), Number(startKey.slice(5, 7))))}`);
-    const dailyRate = monthlyPhp / Math.max(1, weekdayCount(monthStart, monthEnd));
+    const dailyRate = role === 'admin' ? monthlyRateDailyValue(person, start) : monthlyPhp / Math.max(1, weekdayCount(monthStart, monthEnd));
     const otPay = otHours * (dailyRate / 8) * 1.25;
     const hourlyDeductionRatePhp = monthlyPhp ? dailyRate / 8 : hourlyUsd * fx;
     const hourAdjustment = values.payableHoursOverride !== null
@@ -3144,7 +3256,7 @@ function buildPayrollRows(role = selectedPayrollRole) {
     const amountDeductionPhp = role === 'coaches' || (!monthlyPhp && hourlyUsd) ? values.deductedAmount * fx : values.deductedAmount;
     const quickDeductionPhp = hourDeductionPhp + amountDeductionPhp;
     const payableHours = values.payableHoursOverride !== null ? Math.max(0, values.payableHoursOverride) : Math.max(0, payrollBaseHours - hourAdjustment);
-    const statutory = role === 'admin' ? statutoryAdminDeductions(person, values, start, end) : { sss: 0, philHealth: 0, pagibig: 0, total: 0, appliesThisCutoff: false, fallback: { sss: 0, philHealth: 0, pagibig: 0 } };
+    const statutory = statutoryPayrollDeductions(person, values, start, end, role);
     let grossUsd = 0;
     let grossPhp = 0;
     if (role === 'coaches') {
@@ -3157,9 +3269,13 @@ function buildPayrollRows(role = selectedPayrollRole) {
     } else if (role === 'other') {
       grossPhp = monthlyPhp ? cutoffPay : payrollBaseHours * hourlyUsd * fx;
     }
-    const calculatedNetPay = grossPhp + values.adjustment + values.deductions + values.commission - quickDeductionPhp - statutory.total;
+    const calculatedHolidayPayPhp = calculatedHolidayPay(person, role, entries, start, end, fx, hourlyUsd, monthlyPhp);
+    const holidayPayPhp = values.holidayPayOverride === null || values.holidayPayOverride === undefined || values.holidayPayOverride === ''
+      ? calculatedHolidayPayPhp
+      : Math.max(0, Number(values.holidayPayOverride) || 0);
+    const calculatedNetPay = grossPhp + holidayPayPhp + values.adjustment + values.otherEarnings + values.deductions + values.commission - quickDeductionPhp - statutory.total - values.bankFees - values.otherDeductions;
     const netPay = Math.max(0, calculatedNetPay);
-    return { ...values, assignmentKey: payrollAssignmentKey(person), employeeId, payrollRole: role, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total, statutoryAppliesThisCutoff: statutory.appliesThisCutoff, statutoryFallback: statutory.fallback };
+    return { ...values, assignmentKey: payrollAssignmentKey(person), employeeId, payrollRole: role, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, otPay, grossUsd, grossPhp, calculatedHolidayPayPhp, holidayPayPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total, statutoryAppliesThisCutoff: statutory.appliesThisCutoff, statutoryFallback: statutory.fallback };
   });
 }
 
@@ -3196,30 +3312,48 @@ function coachAdjustmentStack(row) {
   const adjustment = Number(row.adjustment || 0);
   const deductions = Number(row.deductions || 0);
   const commission = Number(row.commission || 0);
-  const total = adjustment + deductions + commission;
+  const holiday = Number(row.holidayPayPhp || 0);
+  const otherEarnings = Number(row.otherEarnings || 0);
+  const bankFees = Number(row.bankFees || 0);
+  const otherDeductions = Number(row.otherDeductions || 0);
+  const statutory = Number(row.statutoryDeductionsPhp || 0);
+  const total = holiday + adjustment + otherEarnings + deductions + commission - bankFees - otherDeductions - statutory;
   const parts = [
+    `Holiday ${phpMoney(holiday)}`,
     `Adjustment ${phpMoney(adjustment)}`,
+    `Other earnings ${phpMoney(otherEarnings)}`,
     `Deductions ${phpMoney(deductions)}`,
-    `Commission ${phpMoney(commission)}`
+    `Commission ${phpMoney(commission)}`,
+    `Bank fees -${phpMoney(bankFees)}`,
+    `Other deduction -${phpMoney(otherDeductions)}`,
+    statutory ? `Gov -${phpMoney(statutory)}` : ''
   ];
   const hourAdjustment = Number(row.deductedHours || 0);
   const payAdjustment = Number(row.quickDeductionPhp || 0);
   if (Math.abs(hourAdjustment) > 0.004) parts.push(signedHourShort(hourAdjustment));
   if (Math.abs(payAdjustment) > 0.004) parts.push(signedPhpMoney(payAdjustment));
-  return `<span class="payroll-money payroll-adjustment-stack" title="${escapeHtml(row.note || parts.join(' · '))}">${phpMoney(total)}<small>${escapeHtml(parts.join(' · '))}${row.note ? ` · ${escapeHtml(row.note)}` : ''}</small></span>`;
+  return `<span class="payroll-money payroll-adjustment-stack" title="${escapeHtml(row.note || parts.filter(Boolean).join(' · '))}">${phpMoney(total)}<small>${escapeHtml(parts.filter(Boolean).join(' · '))}${row.note ? ` · ${escapeHtml(row.note)}` : ''}</small></span>`;
 }
 
 function adminDeductionsStack(row) {
   const adjustment = Number(row.adjustment || 0);
   const manual = Number(row.deductions || 0);
   const statutory = Number(row.statutoryDeductionsPhp || 0);
-  const totalDeductionLine = adjustment + manual - statutory;
+  const holiday = Number(row.holidayPayPhp || 0);
+  const otherEarnings = Number(row.otherEarnings || 0);
+  const bankFees = Number(row.bankFees || 0);
+  const otherDeductions = Number(row.otherDeductions || 0);
+  const totalDeductionLine = holiday + adjustment + otherEarnings + manual - statutory - bankFees - otherDeductions;
   const details = [
+    `Holiday ${phpMoney(holiday)}`,
     `Adjustment ${phpMoney(adjustment)}`,
+    `Other earnings ${phpMoney(otherEarnings)}`,
     `Manual ${phpMoney(manual)}`,
     `SSS -${phpMoney(row.statutorySssPhp)}`,
     `PhilHealth -${phpMoney(row.statutoryPhilHealthPhp)}`,
-    `Pag-IBIG -${phpMoney(row.statutoryPagibigPhp)}`
+    `Pag-IBIG -${phpMoney(row.statutoryPagibigPhp)}`,
+    `Bank fees -${phpMoney(bankFees)}`,
+    `Other deduction -${phpMoney(otherDeductions)}`
   ];
   const statutoryNote = row.statutoryAppliesThisCutoff
     ? 'Government deductions are charged once monthly on the 1-15 cutoff and can be edited per employee.'
@@ -3230,16 +3364,28 @@ function adminDeductionsStack(row) {
 function generalAdjustmentStack(row) {
   const adjustment = Number(row.adjustment || 0);
   const deductions = Number(row.deductions || 0);
-  const total = adjustment + deductions;
+  const holiday = Number(row.holidayPayPhp || 0);
+  const otherEarnings = Number(row.otherEarnings || 0);
+  const commission = Number(row.commission || 0);
+  const statutory = Number(row.statutoryDeductionsPhp || 0);
+  const bankFees = Number(row.bankFees || 0);
+  const otherDeductions = Number(row.otherDeductions || 0);
+  const total = holiday + adjustment + otherEarnings + deductions + commission - statutory - bankFees - otherDeductions;
   const parts = [
+    `Holiday ${phpMoney(holiday)}`,
     `Adjustment ${phpMoney(adjustment)}`,
-    `Deductions ${phpMoney(deductions)}`
+    `Other earnings ${phpMoney(otherEarnings)}`,
+    `Deductions ${phpMoney(deductions)}`,
+    `Commission ${phpMoney(commission)}`,
+    statutory ? `Gov -${phpMoney(statutory)}` : '',
+    `Bank fees -${phpMoney(bankFees)}`,
+    `Other deduction -${phpMoney(otherDeductions)}`
   ];
   const hourAdjustment = Number(row.deductedHours || 0);
   const payAdjustment = Number(row.quickDeductionPhp || 0);
   if (Math.abs(hourAdjustment) > 0.004) parts.push(signedHourShort(hourAdjustment));
   if (Math.abs(payAdjustment) > 0.004) parts.push(signedPhpMoney(payAdjustment));
-  return `<span class="payroll-money payroll-adjustment-stack" title="${escapeHtml(row.note || parts.join(' · '))}">${phpMoney(total)}<small>${escapeHtml(parts.join(' · '))}${row.note ? ` · ${escapeHtml(row.note)}` : ''}</small></span>`;
+  return `<span class="payroll-money payroll-adjustment-stack" title="${escapeHtml(row.note || parts.filter(Boolean).join(' · '))}">${phpMoney(total)}<small>${escapeHtml(parts.filter(Boolean).join(' · '))}${row.note ? ` · ${escapeHtml(row.note)}` : ''}</small></span>`;
 }
 
 function renderPayroll() {
@@ -3299,6 +3445,192 @@ function renderPayroll() {
   }
   renderSampleBulkEmailPreview();
   renderQuickBooksPanel();
+  if (document.body.dataset.page === 'adjustments') renderAdjustmentCenter();
+}
+
+function adjustmentsRange() {
+  const now = new Date();
+  const period = $('#adjustmentsPeriod')?.value || 'current';
+  let startKey;
+  let endKey;
+  let payDateKey = null;
+  if (period === 'previous') {
+    ({ startKey, endKey, payDateKey } = currentCutoffKeys(now, true));
+  } else if (period === 'custom') {
+    startKey = $('#adjustmentsStart')?.value || isoDate(now);
+    endKey = $('#adjustmentsEnd')?.value || isoDate(now);
+  } else {
+    ({ startKey, endKey, payDateKey } = currentCutoffKeys(now, false));
+  }
+  return { start: businessStartFromKey(startKey), end: businessEndFromKey(endKey), startKey, endKey, period, payDateKey };
+}
+
+function syncAdjustmentsDatesFromPeriod() {
+  if (!$('#adjustmentsPeriod') || $('#adjustmentsPeriod').value === 'custom') return;
+  const { start, end } = adjustmentsRange();
+  $('#adjustmentsStart').value = isoDate(start);
+  $('#adjustmentsEnd').value = isoDate(end);
+}
+
+function adjustmentPageRows() {
+  const range = adjustmentsRange();
+  return PAYROLL_ROLES.flatMap(role => buildPayrollRows(role, range).map(row => ({ ...row, payrollRole: role })));
+}
+
+function adjustmentInput(value, field, step = '0.01') {
+  return `<input class="adjustment-money-input" data-adjust-field="${field}" type="number" min="0" step="${step}" value="${Number(value || 0).toFixed(2)}">`;
+}
+
+function renderAdjustmentCenter() {
+  if (!$('#adjustmentCenterRows')) return;
+  syncAdjustmentsDatesFromPeriod();
+  const { start, end, period } = adjustmentsRange();
+  const term = ($('#adjustmentSearch')?.value || '').toLowerCase();
+  const rows = adjustmentPageRows().filter(row => {
+    const haystack = `${row.person.name} ${row.person.email} ${row.person.role} ${row.person.department}`.toLowerCase();
+    return !term || haystack.includes(term);
+  });
+  currentAdjustmentRows = rows;
+  $('#adjustmentCenterRows').innerHTML = rows.map((row, index) => {
+    const deductionValue = Math.abs(Number(row.deductions || 0));
+    const statutoryLabel = row.payrollRole === 'admin' && !row.statutoryAppliesThisCutoff
+      ? ' title="Government deductions are saved here but are only charged on the 1-15 cutoff paid on the 20th."'
+      : '';
+    return `<div class="adjustment-center-row" data-adjust-index="${index}">
+      <div class="person"><span class="person-avatar" style="background:${row.person.color}">${row.person.initials}</span><span>${escapeHtml(row.person.name)}<small>${escapeHtml(row.person.role)} · ${escapeHtml(PAYROLL_ROLE_LABELS[row.payrollRole] || row.payrollRole)}</small></span></div>
+      <span class="payroll-money">${row.actualHours.toFixed(2)}h</span>
+      <span class="payroll-money">${phpMoney(row.grossPhp)}</span>
+      <label>Holiday pay${adjustmentInput(row.holidayPayPhp, 'holidayPay')}</label>
+      <label>Commission${adjustmentInput(row.commission, 'commission')}</label>
+      <label>Other earnings${adjustmentInput(row.otherEarnings, 'otherEarnings')}</label>
+      <label>Deductions${adjustmentInput(deductionValue, 'deductions')}</label>
+      <label${statutoryLabel}>Pag-IBIG${adjustmentInput(row.statutoryPagibigPhp, 'pagibig')}</label>
+      <label${statutoryLabel}>PhilHealth${adjustmentInput(row.statutoryPhilHealthPhp, 'philHealth')}</label>
+      <label${statutoryLabel}>SSS${adjustmentInput(row.statutorySssPhp, 'sss')}</label>
+      <label>Bank fees${adjustmentInput(row.bankFees, 'bankFees')}</label>
+      <label>Other deduction${adjustmentInput(row.otherDeductions, 'otherDeductions')}</label>
+      <b class="payroll-money">${phpMoney(row.netPay)}</b>
+      <label class="adjustment-note-field">Notes<input data-adjust-field="note" value="${escapeHtml(row.note || '')}" maxlength="250" placeholder="Payroll note"></label>
+      <button class="start-btn" type="button" data-save-adjustment-row="${index}">Save</button>
+    </div>`;
+  }).join('') || '<div class="empty-state">No employees found for this selected period.</div>';
+  $('#adjustmentCenterActualHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.actualHours * 3600, 0));
+  $('#adjustmentCenterGross').textContent = phpMoney(rows.reduce((sum, row) => sum + row.grossPhp, 0));
+  $('#adjustmentCenterHoliday').textContent = phpMoney(rows.reduce((sum, row) => sum + row.holidayPayPhp, 0));
+  $('#adjustmentCenterNet').textContent = phpMoney(rows.reduce((sum, row) => sum + row.netPay, 0));
+  $('#adjustmentCenterRange').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${period === 'custom' ? 'Custom date' : period === 'previous' ? 'Previous cutoff' : 'Current cutoff'}`;
+}
+
+function adjustmentCenterValue(container, field, fallback = 0) {
+  const input = container.querySelector(`[data-adjust-field="${field}"]`);
+  if (!input) return fallback;
+  if (field === 'note') return input.value.trim();
+  const number = Number(input.value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+async function saveAdjustmentCenterRow(index) {
+  const row = currentAdjustmentRows[Number(index)];
+  const container = document.querySelector(`[data-adjust-index="${index}"]`);
+  if (!row || !container) return showToast('Adjustment row not found.');
+  const { start, end } = adjustmentsRange();
+  const existing = row.record || {};
+  const assignmentKey = row.assignmentKey || 'primary';
+  const record = {
+    employee_id: row.employeeId || row.person.id,
+    period_start: isoDate(start),
+    period_end: isoDate(end),
+    assignment_key: assignmentKey,
+    deducted_hours: Number(existing.deducted_hours ?? existing.deductedHours ?? 0),
+    payable_hours_override: existing.payable_hours_override ?? existing.payableHoursOverride ?? null,
+    deducted_amount: Number(existing.deducted_amount ?? existing.deductedAmount ?? 0),
+    commission: Number(existing.commission ?? 0),
+    adjustment_php: Number(existing.adjustment_php ?? existing.adjustmentPhp ?? row.adjustment ?? 0),
+    deductions_php: -nonNegativeMoneyValue(adjustmentCenterValue(container, 'deductions', Math.abs(row.deductions))),
+    commission_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'commission', row.commission)),
+    holiday_pay_override: nonNegativeMoneyValue(adjustmentCenterValue(container, 'holidayPay', row.holidayPayPhp)),
+    other_earnings_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'otherEarnings', row.otherEarnings)),
+    statutory_sss_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'sss', row.statutorySssPhp)),
+    statutory_philhealth_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'philHealth', row.statutoryPhilHealthPhp)),
+    statutory_pagibig_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'pagibig', row.statutoryPagibigPhp)),
+    bank_fees_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'bankFees', row.bankFees)),
+    other_deductions_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'otherDeductions', row.otherDeductions)),
+    cutoff_pay_override: existing.cutoff_pay_override ?? existing.cutoffPayOverride ?? null,
+    gross_pay_override: existing.gross_pay_override ?? existing.grossPayOverride ?? null,
+    paystub_approved: false,
+    approved_at: null,
+    approved_by: null,
+    paystub_emailed_at: null,
+    note: adjustmentCenterValue(container, 'note', row.note || ''),
+    updated_at: new Date().toISOString()
+  };
+  const button = container.querySelector('[data-save-adjustment-row]');
+  const originalText = button?.textContent || 'Save';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Saving...';
+  }
+  if (usesSupabase()) {
+    const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: payrollAdjustmentConflictTarget() }).select().single();
+    if (error) {
+      const needsNewSql = /holiday_pay_override|other_earnings_php|bank_fees_php|other_deductions_php|column/i.test(error.message || '');
+      showToast(`Could not save payroll additions/deductions: ${error.message}.${needsNewSql ? ' Run outputs/sync2time-additional-pay-deductions-sql.sql in Supabase first.' : ''}`);
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+      return;
+    }
+    payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !payrollAdjustmentMatches(item, data.employee_id, data.period_start, data.period_end, data.assignment_key || 'primary'));
+    payrollAdjustments.push(data);
+  } else {
+    payrollAdjustments = payrollAdjustments.filter(item => !payrollAdjustmentMatches(item, record.employee_id, record.period_start, record.period_end, record.assignment_key));
+    payrollAdjustments.push({
+      ...record,
+      id: crypto.randomUUID(),
+      employeeId: record.employee_id,
+      periodStart: record.period_start,
+      periodEnd: record.period_end,
+      assignmentKey: record.assignment_key,
+      holidayPayOverride: record.holiday_pay_override,
+      otherEarningsPhp: record.other_earnings_php,
+      bankFeesPhp: record.bank_fees_php,
+      otherDeductionsPhp: record.other_deductions_php
+    });
+    persistPayrollAdjustments();
+  }
+  renderAdjustmentCenter();
+  renderPayroll();
+  renderReports();
+  renderEmployeePayrollAdjustments();
+  renderQuickBooksPanel();
+  showToast(`${row.person.name}'s additions/deductions were saved for this selected period.`);
+}
+
+function exportAdjustmentCenter() {
+  const { start, end } = adjustmentsRange();
+  const header = ['Employee', 'Role', 'Payroll Group', 'Actual Hours', 'Gross Pay PHP', 'Calculated Holiday Pay PHP', 'Holiday Pay Used PHP', 'Commission PHP', 'Other Earnings PHP', 'Deductions PHP', 'Pag-IBIG PHP', 'PhilHealth PHP', 'SSS PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Net Pay PHP', 'Notes'];
+  const rows = currentAdjustmentRows.map(row => [
+    row.person.name,
+    row.person.role,
+    PAYROLL_ROLE_LABELS[row.payrollRole] || row.payrollRole,
+    row.actualHours.toFixed(2),
+    row.grossPhp.toFixed(2),
+    row.calculatedHolidayPayPhp.toFixed(2),
+    row.holidayPayPhp.toFixed(2),
+    row.commission.toFixed(2),
+    row.otherEarnings.toFixed(2),
+    row.deductions.toFixed(2),
+    row.statutoryPagibigPhp.toFixed(2),
+    row.statutoryPhilHealthPhp.toFixed(2),
+    row.statutorySssPhp.toFixed(2),
+    row.bankFees.toFixed(2),
+    row.otherDeductions.toFixed(2),
+    row.netPay.toFixed(2),
+    row.note || ''
+  ]);
+  const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
+  exportCsv(`sync2time-additions-deductions-${isoDate(start)}-to-${isoDate(end)}.csv`, csv, 'Additions and deductions exported.');
 }
 
 function sampleBulkEmailRows() {
@@ -3505,10 +3837,17 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['USD to PHP rate', payrollUsdPhpRate().toFixed(4)]);
     lines.push(['Gross USD pay', `USD ${row.grossUsd.toFixed(2)}`]);
     lines.push(['Gross PHP pay', `PHP ${row.grossPhp.toFixed(2)}`]);
+    lines.push(['Holiday pay', `PHP ${Number(row.holidayPayPhp || 0).toFixed(2)}`]);
     lines.push(['Hour adjustment value', signedPhpPlain(row.quickDeductionPhp)]);
     lines.push(['Adjustments', `PHP ${row.adjustment.toFixed(2)}`]);
+    lines.push(['Other earnings', `PHP ${Number(row.otherEarnings || 0).toFixed(2)}`]);
     lines.push(['Deductions', `PHP ${row.deductions.toFixed(2)}`]);
     lines.push(['Commission', `PHP ${row.commission.toFixed(2)}`]);
+    lines.push(['Pag-IBIG', `PHP ${Number(row.statutoryPagibigPhp || 0).toFixed(2)}`]);
+    lines.push(['PhilHealth', `PHP ${Number(row.statutoryPhilHealthPhp || 0).toFixed(2)}`]);
+    lines.push(['SSS', `PHP ${Number(row.statutorySssPhp || 0).toFixed(2)}`]);
+    lines.push(['Bank fees', `PHP ${Number(row.bankFees || 0).toFixed(2)}`]);
+    lines.push(['Other deduction', `PHP ${Number(row.otherDeductions || 0).toFixed(2)}`]);
   } else if (selectedPayrollRole === 'admin') {
     lines.push(['Expected hours', row.expectedHours.toFixed(2)]);
     lines.push(['Actual hours', row.actualHours.toFixed(2)]);
@@ -3520,13 +3859,17 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Cutoff pay', `PHP ${row.cutoffPay.toFixed(2)}`]);
     lines.push(['OT pay', `PHP ${row.otPay.toFixed(2)}`]);
     lines.push(['Gross pay', `PHP ${row.grossPhp.toFixed(2)}`]);
+    lines.push(['Holiday pay', `PHP ${Number(row.holidayPayPhp || 0).toFixed(2)}`]);
     lines.push(['Hour adjustment value', signedPhpPlain(row.quickDeductionPhp)]);
     lines.push(['Adjustments', `PHP ${row.adjustment.toFixed(2)}`]);
+    lines.push(['Other earnings', `PHP ${Number(row.otherEarnings || 0).toFixed(2)}`]);
     lines.push(['Manual deductions', `PHP ${row.deductions.toFixed(2)}`]);
     lines.push(['Government deductions', row.statutoryAppliesThisCutoff ? 'Charged this cutoff' : 'Not charged this cutoff']);
     lines.push(['SSS employee share', `PHP ${Number(row.statutorySssPhp || 0).toFixed(2)}`]);
     lines.push(['PhilHealth employee share', `PHP ${Number(row.statutoryPhilHealthPhp || 0).toFixed(2)}`]);
     lines.push(['Pag-IBIG employee share', `PHP ${Number(row.statutoryPagibigPhp || 0).toFixed(2)}`]);
+    lines.push(['Bank fees', `PHP ${Number(row.bankFees || 0).toFixed(2)}`]);
+    lines.push(['Other deduction', `PHP ${Number(row.otherDeductions || 0).toFixed(2)}`]);
     lines.push(['Commission', `PHP ${row.commission.toFixed(2)}`]);
   } else {
     lines.push(['Gross pay', `PHP ${row.grossPhp.toFixed(2)}`]);
@@ -3536,17 +3879,26 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
     lines.push(['Pending OT hours', row.pendingOtHours.toFixed(2)]);
     lines.push(['Rejected excess hours', row.rejectedOtHours.toFixed(2)]);
+    lines.push(['Holiday pay', `PHP ${Number(row.holidayPayPhp || 0).toFixed(2)}`]);
     lines.push(['Hour adjustment value', signedPhpPlain(row.quickDeductionPhp)]);
     lines.push(['Adjustments', `PHP ${row.adjustment.toFixed(2)}`]);
+    lines.push(['Other earnings', `PHP ${Number(row.otherEarnings || 0).toFixed(2)}`]);
     lines.push(['Deductions', `PHP ${row.deductions.toFixed(2)}`]);
+    lines.push(['Pag-IBIG', `PHP ${Number(row.statutoryPagibigPhp || 0).toFixed(2)}`]);
+    lines.push(['PhilHealth', `PHP ${Number(row.statutoryPhilHealthPhp || 0).toFixed(2)}`]);
+    lines.push(['SSS', `PHP ${Number(row.statutorySssPhp || 0).toFixed(2)}`]);
+    lines.push(['Bank fees', `PHP ${Number(row.bankFees || 0).toFixed(2)}`]);
+    lines.push(['Other deduction', `PHP ${Number(row.otherDeductions || 0).toFixed(2)}`]);
     lines.push(['Commission', `PHP ${row.commission.toFixed(2)}`]);
   }
   let y = 246;
+  const lineStep = lines.length > 18 ? 22 : 30;
+  const lineHeight = lineStep - 2;
   doc.setFontSize(10);
   lines.forEach(([label, value], index) => {
     if (index % 2 === 0) {
       doc.setFillColor(246, 249, 252);
-      doc.rect(38, y - 15, pageWidth - 76, 28, 'F');
+      doc.rect(38, y - 14, pageWidth - 76, lineHeight, 'F');
     }
     doc.setTextColor(91, 103, 118);
     doc.setFont('helvetica', 'normal');
@@ -3554,7 +3906,7 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     doc.setTextColor(24, 35, 49);
     doc.setFont('helvetica', 'bold');
     doc.text(value, pageWidth - 50, y + 3, { align: 'right' });
-    y += 30;
+    y += lineStep;
   });
   doc.setFillColor(10, 34, 61);
   doc.roundedRect(38, y + 8, pageWidth - 76, 68, 7, 7, 'F');
@@ -4627,17 +4979,22 @@ function quickBooksPayloadRows(rows) {
     phpRate: Number(payrollUsdPhpRate() || 0),
     grossUsd: Number(row.grossUsd || 0),
     grossPhp: Number(row.grossPhp || 0),
+    calculatedHolidayPayPhp: Number(row.calculatedHolidayPayPhp || 0),
+    holidayPayPhp: Number(row.holidayPayPhp || 0),
     hourAdjustment: Number(row.deductedHours || 0),
     hourAdjustmentPhp: Number(row.hourDeductionPhp || 0),
     amountDeductionPhp: Number(row.amountDeductionPhp || 0),
     quickDeductionPhp: Number(row.quickDeductionPhp || 0),
     adjustmentPhp: Number(row.adjustment || 0),
+    otherEarningsPhp: Number(row.otherEarnings || 0),
     deductionsPhp: Number(row.deductions || 0),
     commissionPhp: Number(row.commission || 0),
     statutorySssPhp: Number(row.statutorySssPhp || 0),
     statutoryPhilHealthPhp: Number(row.statutoryPhilHealthPhp || 0),
     statutoryPagibigPhp: Number(row.statutoryPagibigPhp || 0),
     statutoryDeductionsPhp: Number(row.statutoryDeductionsPhp || 0),
+    bankFeesPhp: Number(row.bankFees || 0),
+    otherDeductionsPhp: Number(row.otherDeductions || 0),
     netPayPhp: Number(row.netPay || 0),
     note: row.note || ''
   }));
@@ -4988,7 +5345,7 @@ function cardKeyAction(event, callback) {
 
 function showPage() {
   const page = (location.hash || '#today').slice(1);
-  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'team', 'approvals', 'ai-alerts', 'audit'];
+  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'adjustments', 'team', 'approvals', 'ai-alerts', 'audit'];
   const employeeAllowed = ['today', 'hours', 'calendar', 'documents', 'requests'];
   const allowed = currentAccount?.role === 'employee' ? employeeAllowed : adminAllowed;
   const active = allowed.includes(page) ? page : 'today';
@@ -4998,6 +5355,7 @@ function showPage() {
   if (active === 'projects') renderProjects();
   if (active === 'reports') renderReports();
   if (active === 'payroll') renderPayroll();
+  if (active === 'adjustments') renderAdjustmentCenter();
   if (active === 'team') renderTeamDirectory();
   if (active === 'approvals') renderApprovals();
   if (active === 'ai-alerts') renderAiAlerts();
@@ -5811,10 +6169,12 @@ $('#reportExport').onclick = () => {
   const rows = currentReportRows.map(row => [
     row.name, row.email, row.role, businessDateLabel(start), businessDateLabel(end), period, row.entries,
     (row.seconds / 3600).toFixed(2), row.deductedHours.toFixed(2), row.deductedAmount.toFixed(2),
-    row.commission.toFixed(2), (row.payableSeconds / 3600).toFixed(2), row.pay.toFixed(2),
+    row.commission.toFixed(2), row.holidayPayPhp.toFixed(2), row.otherEarningsPhp.toFixed(2),
+    row.manualDeductionsPhp.toFixed(2), row.bankFeesPhp.toFixed(2), row.otherDeductionsPhp.toFixed(2),
+    (row.payableSeconds / 3600).toFixed(2), row.pay.toFixed(2),
     row.netPay.toFixed(2), row.adjustment?.note || ''
   ].map(csvCell).join(','));
-  const header = ['Employee', 'Email', 'Role', 'From', 'To', 'Period', 'Entries', 'Worked Hours', 'Hour Adjustment', 'Deducted Amount USD', 'Commission USD', 'Payable Hours', 'Gross Pay USD', 'Net Pay USD', 'Adjustment Note'];
+  const header = ['Employee', 'Email', 'Role', 'From', 'To', 'Period', 'Entries', 'Worked Hours', 'Hour Adjustment', 'Deducted Amount USD', 'Commission USD', 'Holiday Pay PHP', 'Other Earnings PHP', 'Manual Deductions PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Payable Hours', 'Gross Pay USD', 'Net Pay USD', 'Adjustment Note'];
   exportCsv(`sync2time-payroll-${isoDate(start)}-to-${isoDate(end)}.csv`, [header.map(csvCell).join(','), ...rows].join('\r\n'), 'Payroll report exported as CSV.');
 };
 
@@ -5825,6 +6185,25 @@ $('#payrollTabs').onclick = event => {
   renderPayroll();
 };
 $('#payrollCutoff').onchange = renderPayroll;
+if ($('#adjustmentsPeriod')) {
+  $('#adjustmentsPeriod').onchange = () => {
+    syncAdjustmentsDatesFromPeriod();
+    renderAdjustmentCenter();
+  };
+}
+['adjustmentsStart', 'adjustmentsEnd'].forEach(id => {
+  const input = $(`#${id}`);
+  if (input) input.onchange = () => {
+    $('#adjustmentsPeriod').value = 'custom';
+    if ($('#adjustmentsStart').value && $('#adjustmentsEnd').value && $('#adjustmentsStart').value > $('#adjustmentsEnd').value) {
+      if (id === 'adjustmentsStart') $('#adjustmentsEnd').value = $('#adjustmentsStart').value;
+      else $('#adjustmentsStart').value = $('#adjustmentsEnd').value;
+    }
+    renderAdjustmentCenter();
+  };
+});
+if ($('#adjustmentSearch')) $('#adjustmentSearch').oninput = renderAdjustmentCenter;
+if ($('#adjustmentCenterExport')) $('#adjustmentCenterExport').onclick = exportAdjustmentCenter;
 async function savePayrollFxOverride() {
   const rate = Number($('#payrollFxRate').value);
   if (!(rate > 0)) return showToast('Enter a valid USD to PHP rate.');
@@ -5899,14 +6278,14 @@ $('#payrollExport').onclick = () => {
   let header;
   let rows;
   if (selectedPayrollRole === 'coaches') {
-    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Hour Adjustment', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'USD Hourly Rate', 'PHP Rate', 'Gross USD Pay', 'Gross PHP Pay', 'Hour Adjustment PHP', 'Manual Adjustments PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.hourlyUsd.toFixed(2), payrollUsdPhpRate().toFixed(4), row.grossUsd.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
+    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Hour Adjustment', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'USD Hourly Rate', 'PHP Rate', 'Gross USD Pay', 'Gross PHP Pay', 'Calculated Holiday Pay PHP', 'Holiday Pay Used PHP', 'Hour Adjustment PHP', 'Manual Adjustments PHP', 'Other Earnings PHP', 'Deductions PHP', 'Commission PHP', 'Pag-IBIG PHP', 'PhilHealth PHP', 'SSS PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Net Pay PHP', 'Notes'];
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.hourlyUsd.toFixed(2), payrollUsdPhpRate().toFixed(4), row.grossUsd.toFixed(2), row.grossPhp.toFixed(2), row.calculatedHolidayPayPhp.toFixed(2), row.holidayPayPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.otherEarnings.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutorySssPhp.toFixed(2), row.bankFees.toFixed(2), row.otherDeductions.toFixed(2), row.netPay.toFixed(2), row.note]);
   } else if (selectedPayrollRole === 'admin') {
-    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Hour Adjustment', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'Cutoff Pay PHP', 'OT Pay PHP', 'Gross Pay PHP', 'Hour Adjustment PHP', 'Manual Adjustments PHP', 'Manual Deductions PHP', 'SSS PHP', 'PhilHealth PHP', 'Pag-IBIG PHP', 'Total Government Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.cutoffPay.toFixed(2), row.otPay.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.deductions.toFixed(2), row.statutorySssPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryDeductionsPhp.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
+    header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Hour Adjustment', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'Cutoff Pay PHP', 'OT Pay PHP', 'Gross Pay PHP', 'Calculated Holiday Pay PHP', 'Holiday Pay Used PHP', 'Hour Adjustment PHP', 'Manual Adjustments PHP', 'Other Earnings PHP', 'Manual Deductions PHP', 'SSS PHP', 'PhilHealth PHP', 'Pag-IBIG PHP', 'Total Government Deductions PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.cutoffPay.toFixed(2), row.otPay.toFixed(2), row.grossPhp.toFixed(2), row.calculatedHolidayPayPhp.toFixed(2), row.holidayPayPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.otherEarnings.toFixed(2), row.deductions.toFixed(2), row.statutorySssPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryDeductionsPhp.toFixed(2), row.bankFees.toFixed(2), row.otherDeductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
   } else {
-    header = ['Employee', 'Role', 'Actual Hours', 'Payable Hours', 'Hour Adjustment', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'Gross Pay PHP', 'Hour Adjustment PHP', 'Manual Adjustments PHP', 'Deductions PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.grossPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
+    header = ['Employee', 'Role', 'Actual Hours', 'Payable Hours', 'Hour Adjustment', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'Gross Pay PHP', 'Calculated Holiday Pay PHP', 'Holiday Pay Used PHP', 'Hour Adjustment PHP', 'Manual Adjustments PHP', 'Other Earnings PHP', 'Deductions PHP', 'Pag-IBIG PHP', 'PhilHealth PHP', 'SSS PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.grossPhp.toFixed(2), row.calculatedHolidayPayPhp.toFixed(2), row.holidayPayPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.otherEarnings.toFixed(2), row.deductions.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutorySssPhp.toFixed(2), row.bankFees.toFixed(2), row.otherDeductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
   }
   const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
   exportCsv(`sync2time-${selectedPayrollRole}-payroll-${isoDate(start)}-to-${isoDate(end)}.csv`, csv, `${selectedPayrollRole} payroll exported.`);
@@ -6304,6 +6683,12 @@ document.body.addEventListener('click', async event => {
     openPaystubEmailEditor(emailPaystub.dataset.emailPaystub);
     return;
   }
+  const saveAdjustmentRow = event.target.closest('[data-save-adjustment-row]');
+  if (saveAdjustmentRow) {
+    event.stopPropagation();
+    await saveAdjustmentCenterRow(saveAdjustmentRow.dataset.saveAdjustmentRow);
+    return;
+  }
   const deleteTime = event.target.closest('[data-delete-time]');
   if (deleteTime) {
     event.stopPropagation();
@@ -6338,6 +6723,7 @@ document.body.addEventListener('click', async event => {
   renderDeletedTimeAlerts();
   renderReports();
   renderPayroll();
+  renderAdjustmentCenter();
   refreshFxRate();
   refreshPayrollUsdPhpRate();
   if (supabaseClient) {
