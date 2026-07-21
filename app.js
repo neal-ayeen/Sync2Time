@@ -1087,10 +1087,9 @@ function renderQuickBooksMappingPanel() {
     roleTarget.innerHTML = PAYROLL_ROLES.map(role => {
       const mapping = quickBooksMapping.roleMappings[role] || {};
       const classList = quickBooksResources.classes;
-      const classControl = classList.length
-        ? `<select data-qb-role-class-id="${role}">${quickBooksResourceOptionHtml(classList, mapping.classId, 'Choose QuickBooks class (optional)', mapping.className)}</select>`
-        : `<input data-qb-role-class-id="${role}" value="${escapeHtml(mapping.classId || '')}" placeholder="QB class ID optional">`;
-      const status = mapping.classId ? `${escapeHtml(mapping.className || 'Mapped class')} #${escapeHtml(mapping.classId)}` : 'No class mapped';
+      const classPlaceholder = classList.length ? 'Choose QuickBooks class (optional)' : 'No classes fetched - click Fetch QuickBooks lists first';
+      const classControl = `<select data-qb-role-class-id="${role}">${quickBooksResourceOptionHtml(classList, mapping.classId, classPlaceholder, mapping.className)}</select>`;
+      const status = mapping.classId ? `${escapeHtml(mapping.className || 'Mapped class')} #${escapeHtml(mapping.classId)}` : classList.length ? 'No class mapped' : 'No classes fetched yet';
       return `<div class="qb-role-map-row" data-qb-role-row="${role}">
         <span>${escapeHtml(PAYROLL_ROLE_LABELS[role] || role)}</span>
         <label>QuickBooks class${classControl}</label>
@@ -1117,7 +1116,8 @@ function renderQuickBooksMappingPanel() {
       const role = event.currentTarget.dataset.qbRoleClassId;
       const resource = quickBooksSelectedResource(quickBooksResources.classes, event.currentTarget.value);
       const nameInput = $(`[data-qb-role-class-name="${role}"]`);
-      if (resource && nameInput) nameInput.value = resource.fullyQualifiedName || resource.displayName || resource.name;
+      const selectedName = event.currentTarget.selectedOptions?.[0]?.dataset?.name || '';
+      if (nameInput) nameInput.value = resource ? (resource.fullyQualifiedName || resource.displayName || resource.name) : selectedName;
       const status = $(`[data-qb-role-class-status="${role}"]`);
       if (status) status.textContent = event.currentTarget.value ? 'Changed, not saved yet' : 'Class mapping will be cleared after save';
       quickBooksMapping = normalizeQuickBooksMapping(readQuickBooksMappingForm());
