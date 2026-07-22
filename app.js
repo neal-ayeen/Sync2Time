@@ -103,6 +103,7 @@ let supabaseLivePresence = [];
 let supabaseTimeEntries = [];
 let supabaseDeletedTimeEntries = [];
 let sharedSettings = {};
+let localOffboardedEmployees = JSON.parse(localStorage.getItem('sync2time-offboarded-employees') || '{}');
 let deletedTimeAlerts = JSON.parse(localStorage.getItem('sync2time-deleted-time-alerts') || '[]');
 let payrollAdjustments = JSON.parse(localStorage.getItem('sync2time-payroll-adjustments') || '[]');
 let payrollAdjustmentEvents = JSON.parse(localStorage.getItem('sync2time-payroll-adjustment-events') || '[]');
@@ -596,6 +597,35 @@ function isAllowedAccessRole(role) {
   return role === 'admin' || role === 'employee';
 }
 
+function offboardedEmployeeRegistry() {
+  const shared = sharedSettings.offboarded_employee_ids?.employees || {};
+  return { ...shared, ...(localOffboardedEmployees || {}) };
+}
+
+function isEmployeeOffboarded(record = {}) {
+  if (!record) return false;
+  const role = record.role || record.accessRole;
+  if (role && !isAllowedAccessRole(role)) return true;
+  const registry = offboardedEmployeeRegistry();
+  const id = String(record.id || '').trim();
+  const email = String(record.email || '').trim().toLowerCase();
+  if (id && registry[id]) return true;
+  return Object.values(registry).some(item =>
+    String(item?.email || '').trim().toLowerCase() === email
+  );
+}
+
+function rememberOffboardedEmployee(employee = {}, meta = {}) {
+  const id = String(meta.employeeId || employee.id || '').trim();
+  if (!id) return;
+  localOffboardedEmployees[id] = {
+    email: String(meta.email || employee.email || '').trim().toLowerCase(),
+    name: meta.name || employee.name || 'Employee',
+    offboardedAt: meta.offboardedAt || new Date().toISOString()
+  };
+  localStorage.setItem('sync2time-offboarded-employees', JSON.stringify(localOffboardedEmployees));
+}
+
 function updateAccountChrome(account = currentAccount, profile = currentProfile) {
   if (!account) return;
   $('#accessChip').innerHTML = `<i></i> ${account.role === 'admin' ? 'Admin' : 'Employee'} access`;
@@ -614,7 +644,7 @@ function syncCurrentProfileFromLoadedProfiles() {
     profile.email?.toLowerCase() === currentAccount.email?.toLowerCase()
   );
   if (!refreshed) return;
-  if (!isAllowedAccessRole(refreshed.role)) {
+  if (!isAllowedAccessRole(refreshed.role) || isEmployeeOffboarded(refreshed)) {
     setTimeout(() => signOutForInactiveAccess(), 0);
     return;
   }
@@ -3070,7 +3100,7 @@ function renderTeamDirectory() {
   $('#teamRows').innerHTML = roster.map(person => {
     const access = managedEmployees.find(employee => employee.email === person.email || employee.name === person.name);
     const profile = usesSupabase() && person.id ? supabaseProfiles.find(item => item.id === person.id) : null;
-    const isOffboarded = profile?.role && !isAllowedAccessRole(profile.role);
+    const isOffboarded = isEmployeeOffboarded(profile || person);
     const hasSupabaseAccess = !!(profile && !isOffboarded);
     const live = activeEmployees.some(record =>
       record.employeeId === person.id ||
@@ -3078,7 +3108,7 @@ function renderTeamDirectory() {
       record.email?.toLowerCase() === person.email?.toLowerCase()
     );
     const editAction = `<button class="edit-employee-btn" data-edit-employee="${person.id || ''}" data-edit-email="${encodeURIComponent(person.email || '')}" data-edit-name="${encodeURIComponent(person.name)}">Edit</button>`;
-    const offboardAction = `<button class="offboard-employee-btn" data-offboard-employee="${person.id || ''}" data-offboard-email="${encodeURIComponent(person.email || '')}" data-offboard-name="${encodeURIComponent(person.name)}">${isOffboarded ? 'Offboarded' : 'Offboard'}</button>`;
+    const offboardAction = `<button class="offboard-employee-btn" data-offboard-employee="${person.id || ''}" data-offboard-email="${encodeURIComponent(person.email || '')}" data-offboard-name="${encodeURIComponent(person.name)}" ${isOffboarded ? 'disabled' : ''}>${isOffboarded ? 'Offboarded' : 'Offboard'}</button>`;
     const passwordLine = access?.tempPassword ? `<small>${access.email} · Pass: ${access.tempPassword}</small>` : `<small>${person.department || 'Employee'}</small>`;
     const clockOutAction = live ? `<button class="admin-clockout-btn" data-admin-clockout="${person.id || ''}" data-clockout-email="${encodeURIComponent(person.email || '')}" data-clockout-name="${encodeURIComponent(person.name)}">Clock out</button>` : '<button class="admin-clockout-btn" disabled>Not working</button>';
     const clearAction = `<button class="clear-time-btn" data-clear-employee-time="${person.id || ''}" data-clear-time-email="${encodeURIComponent(person.email || '')}" data-clear-time-name="${encodeURIComponent(person.name)}">Clear dry-run time</button>`;
@@ -6233,18 +6263,30 @@ async function offboardEmployeeAccess(identifier = '', email = '', name = '') {
   const confirmMessage = `Please confirm ${employee.name} has completed the offboarding process.\n\nThis will remove Sync2Time sign-in access while preserving historical attendance, payroll, and request records.`;
   if (!confirm(confirmMessage)) return;
   if (usesSupabase()) {
-    const { data, error } = await supabaseClient.functions.invoke('admin-offboard-employee', {
-      body: { employeeId: employee.id, email: employee.email }
+    let data;
+    try {
+      data = await invokeEdgeFunction('admin-offboard-employee', {
+        employeeId: employee.id,
+        email: employee.email
+      });
+    } catch (error) {
+      return showToast(`Offboarding error: ${error.message || error}`);
+    }
+    rememberOffboardedEmployee(employee, {
+      employeeId: data.employeeId || employee.id,
+      email: data.profile?.email || employee.email,
+      name: data.profile?.full_name || employee.name,
+      offboardedAt: data.offboardedAt
     });
-    if (error || !data?.ok) return showToast(`Offboarding error: ${error?.message || data?.error || 'Unable to offboard employee.'}`);
     managedEmployees = managedEmployees.filter(item => item.id !== employee.id);
     persistEmployees();
     await refreshSupabaseData();
     renderManagedEmployees();
     renderTeamDirectory();
-    showToast(`${employee.name} was offboarded and access was removed.`);
+    showToast(`${employee.name} was offboarded and access was removed.${data.warning ? ` Note: ${data.warning}` : ''}`);
     return;
   }
+  rememberOffboardedEmployee(employee);
   managedEmployees = managedEmployees.filter(item => item.id !== employee.id);
   persistEmployees();
   renderManagedEmployees();
@@ -6418,6 +6460,10 @@ async function applySupabaseSession(session) {
   }
   currentProfile = data;
   await refreshSupabaseData();
+  if (isEmployeeOffboarded(data)) {
+    await signOutForInactiveAccess();
+    return false;
+  }
   sessionStorage.setItem('sync2time-supabase-session', 'true');
   applyAccess(accountFromProfile(data));
   return true;
