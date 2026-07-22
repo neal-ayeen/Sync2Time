@@ -188,6 +188,9 @@ let selectedApprovalRequest = null;
 let interval;
 let longSessionDeadline = null;
 let longSessionClockOutPending = false;
+let timerActionPending = false;
+let timerActionLabel = '';
+let runningActivitySyncTimer = null;
 const LONG_SESSION_SECONDS = 3 * 60 * 60;
 const LONG_SESSION_RESPONSE_SECONDS = 60;
 let scheduleFilter = 'checked-in';
@@ -302,7 +305,7 @@ function taskMatchesProject(task = '', project = '') {
 }
 
 function entryMatchesDualAssignment(entry = {}, assignment) {
-  return taskMatchesProject(entry.task || '', assignment.project);
+  return taskMatchesProject(parseLiveActivity(entry.task || '').task || '', assignment.project);
 }
 
 function currentEmployeeTaskValue() {
@@ -1436,48 +1439,88 @@ function save() {
   if (currentAccount?.role === 'employee') localStorage.setItem(stateKey(), JSON.stringify(state));
 }
 
-async function createSupabaseTimeEntry(task, start) {
+async function findOwnSupabaseOpenEntry({ quiet = false } = {}) {
   if (!usesSupabase() || !currentProfile?.id) return null;
   const { data, error } = await supabaseClient
     .from('time_entries')
-    .insert({
-      employee_id: currentProfile.id,
-      task,
-      clock_in: new Date(start).toISOString(),
-      status: 'working'
-    })
-    .select('id')
-    .single();
-  if (error) {
-    if (/one_working_shift_per_employee|duplicate key/i.test(error.message || '')) {
-      const resumed = await resumeExistingSupabaseShift(task);
-      if (resumed) return resumed;
-    }
-    showToast(`Clock-in error: ${error.message}`);
-    return null;
-  }
-  return { id: data.id, start, task, resumed: false };
-}
-
-async function resumeExistingSupabaseShift(task) {
-  if (!usesSupabase() || !currentProfile?.id) return null;
-  const { data, error } = await supabaseClient
-    .from('time_entries')
-    .select('id, task, clock_in')
+    .select('id, employee_id, task, clock_in, clock_out, status')
     .eq('employee_id', currentProfile.id)
     .or('status.eq.working,clock_out.is.null')
     .order('clock_in', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error || !data?.id) {
-    showToast(`Clock-in recovery error: ${error?.message || 'No active shift found to resume.'}`);
+  if (error) {
+    if (!quiet) showToast(`Active shift sync error: ${error.message}`);
     return null;
   }
-  const cleanTask = task || data.task || 'Tracked time';
-  if (cleanTask !== data.task) {
+  return data?.id ? data : null;
+}
+
+function runningStateFromSupabaseEntry(entry, fallbackTask = 'Tracked time', fallbackNote = '') {
+  const activity = parseLiveActivity(entry?.task || fallbackTask, fallbackNote);
+  const start = new Date(entry.clock_in).getTime();
+  return {
+    task: activity.task || fallbackTask || 'Tracked time',
+    note: activity.note || fallbackNote || '',
+    start,
+    timeEntryId: entry.id,
+    nextLongSessionCheckAt: start + LONG_SESSION_SECONDS * 1000
+  };
+}
+
+function adoptSupabaseOpenEntry(entry, fallbackTask = 'Tracked time', fallbackNote = '') {
+  if (!entry?.id || !entry.clock_in) return null;
+  state.running = runningStateFromSupabaseEntry(entry, fallbackTask, fallbackNote);
+  state.clockIn = state.clockIn || state.running.start;
+  state.clockOut = null;
+  save();
+  return state.running;
+}
+
+async function createSupabaseTimeEntry(task, start, note = '') {
+  if (!usesSupabase() || !currentProfile?.id) return null;
+  const existing = await findOwnSupabaseOpenEntry({ quiet: true });
+  if (existing) return resumeExistingSupabaseShift(task, note, existing);
+  const { data, error } = await supabaseClient
+    .from('time_entries')
+    .insert({
+      employee_id: currentProfile.id,
+      task: serializeLiveActivity(task, note),
+      clock_in: new Date(start).toISOString(),
+      status: 'working'
+    })
+    .select('id, task, clock_in')
+    .maybeSingle();
+  if (error) {
+    const resumed = await resumeExistingSupabaseShift(task, note, null, { quiet: true });
+    if (resumed) return resumed;
+    showToast(`Clock-in error: ${error.message}`);
+    return null;
+  }
+  if (!data?.id) {
+    const resumed = await resumeExistingSupabaseShift(task, note, null, { quiet: true });
+    if (resumed) return resumed;
+    showToast('Clock-in error: Sync2Time could not confirm the new time entry. Please refresh and try again.');
+    return null;
+  }
+  return { id: data.id, start, task, note, resumed: false };
+}
+
+async function resumeExistingSupabaseShift(task, note = '', existingEntry = null, { quiet = false } = {}) {
+  if (!usesSupabase() || !currentProfile?.id) return null;
+  const data = existingEntry || await findOwnSupabaseOpenEntry({ quiet: true });
+  if (!data?.id) {
+    if (!quiet) showToast('Clock-in recovery error: No active shift found to resume.');
+    return null;
+  }
+  const currentActivity = parseLiveActivity(data.task);
+  const cleanTask = task || currentActivity.task || 'Tracked time';
+  const cleanNote = note || currentActivity.note || '';
+  const storedActivity = serializeLiveActivity(cleanTask, cleanNote);
+  if ((task || note) && storedActivity !== data.task) {
     await supabaseClient
       .from('time_entries')
-      .update({ task: cleanTask })
+      .update({ task: storedActivity })
       .eq('id', data.id)
       .eq('employee_id', currentProfile.id);
   }
@@ -1485,29 +1528,77 @@ async function resumeExistingSupabaseShift(task) {
     id: data.id,
     start: new Date(data.clock_in).getTime(),
     task: cleanTask,
+    note: cleanNote,
     resumed: true
   };
 }
 
 async function completeSupabaseTimeEntry(end) {
-  if (!usesSupabase() || !currentProfile?.id || !state.running?.timeEntryId) return;
+  if (!usesSupabase()) return { ok: true };
+  if (!currentProfile?.id) {
+    showToast('Clock-out error: employee profile is not loaded. Please refresh and try again.');
+    return { ok: false };
+  }
+  let entryId = state.running?.timeEntryId || null;
+  let fallbackOpenEntry = null;
+  if (!entryId) {
+    fallbackOpenEntry = await findOwnSupabaseOpenEntry();
+    entryId = fallbackOpenEntry?.id || null;
+    if (fallbackOpenEntry) adoptSupabaseOpenEntry(fallbackOpenEntry, state.running?.task, state.running?.note);
+  }
+  if (!entryId) {
+    showToast('Clock-out error: no active Sync2Time shift was found for this employee.');
+    return { ok: false };
+  }
   const { error } = await supabaseClient
     .from('time_entries')
     .update({
       clock_out: new Date(end).toISOString(),
       status: 'completed'
     })
-    .eq('id', state.running.timeEntryId)
+    .eq('id', entryId)
     .eq('employee_id', currentProfile.id);
-  if (error) showToast(`Clock-out error: ${error.message}`);
-  else if (!currentWorkIsDualAssignment()) requestAiOvertimeReview(state.running.timeEntryId).then(() => loadOvertimeAlerts().then(renderAiAlerts));
+  if (error) {
+    showToast(`Clock-out error: ${error.message}`);
+    return { ok: false };
+  }
+  const stillOpen = await findOwnSupabaseOpenEntry({ quiet: true });
+  if (stillOpen?.id) {
+    if (stillOpen.id !== entryId) {
+      const retry = await supabaseClient
+        .from('time_entries')
+        .update({
+          clock_out: new Date(end).toISOString(),
+          status: 'completed'
+        })
+        .eq('id', stillOpen.id)
+        .eq('employee_id', currentProfile.id);
+      if (retry.error) {
+        showToast(`Clock-out retry error: ${retry.error.message}`);
+        return { ok: false };
+      }
+      const afterRetry = await findOwnSupabaseOpenEntry({ quiet: true });
+      if (afterRetry?.id) {
+        adoptSupabaseOpenEntry(afterRetry, state.running?.task, state.running?.note);
+        showToast('Clock-out did not finish because Supabase still has an open shift. Please contact HR if this repeats.');
+        return { ok: false };
+      }
+      entryId = stillOpen.id;
+    } else {
+      adoptSupabaseOpenEntry(stillOpen, state.running?.task, state.running?.note);
+      showToast('Clock-out did not finish because Supabase still has this shift open. Please try once more or contact HR.');
+      return { ok: false };
+    }
+  }
+  if (!currentWorkIsDualAssignment()) requestAiOvertimeReview(entryId).then(() => loadOvertimeAlerts().then(renderAiAlerts));
+  return { ok: true, id: entryId };
 }
 
 async function updateSupabaseRunningTask(task) {
   if (!usesSupabase() || !currentProfile?.id || !state.running?.timeEntryId) return;
   const { error } = await supabaseClient
     .from('time_entries')
-    .update({ task })
+    .update({ task: serializeLiveActivity(task, state.running?.note || '') })
     .eq('id', state.running.timeEntryId)
     .eq('employee_id', currentProfile.id)
     .eq('status', 'working');
@@ -2323,7 +2414,8 @@ function hydrateEmployeeStateFromSupabase(account = currentAccount) {
   const completed = ownEntries.filter(entry => entry.clock_out && entry.status !== 'working');
   const liveRecord = supabaseLivePresence.find(record => record.employeeId === currentProfile.id || record.email === account?.email);
   state.entries = completed.map(entry => ({
-    task: entry.task || 'Tracked time',
+    task: parseLiveActivity(entry.task).task || 'Tracked time',
+    note: parseLiveActivity(entry.task).note || '',
     seconds: secondsBetween(entry.clock_in, entry.clock_out),
     start: new Date(entry.clock_in).getTime(),
     end: new Date(entry.clock_out).getTime(),
@@ -2331,13 +2423,7 @@ function hydrateEmployeeStateFromSupabase(account = currentAccount) {
     remote: true
   }));
   if (active) {
-    state.running = {
-      task: active.task || 'Tracked time',
-      note: liveRecord?.note || '',
-      start: new Date(active.clock_in).getTime(),
-      timeEntryId: active.id,
-      nextLongSessionCheckAt: new Date(active.clock_in).getTime() + LONG_SESSION_SECONDS * 1000
-    };
+    state.running = runningStateFromSupabaseEntry(active, 'Tracked time', liveRecord?.note || '');
   } else {
     state.running = null;
   }
@@ -2689,9 +2775,10 @@ function render() {
   $('#statusLabel').textContent = running ? 'Clocked in' : 'Ready to work';
   $('#statusDot').classList.toggle('running', !!running);
   $('#timerHint').textContent = running ? `Clocked in at ${formatClock(running.start)} · keep going.` : 'Choose a task, then clock in.';
-  $('#timerButtonText').textContent = running ? 'Clock out' : 'Clock in';
+  $('#timerButtonText').textContent = timerActionPending ? (timerActionLabel || 'Saving...') : (running ? 'Clock out' : 'Clock in');
   $('#playIcon').textContent = running ? '■' : '▶';
   $('#toggleTimer').classList.toggle('running', !!running);
+  $('#toggleTimer').disabled = !!timerActionPending;
   $('#lunchButton').textContent = state.lunch ? 'End lunch' : 'Start lunch';
   $('#lunchButton').classList.toggle('running', !!state.lunch);
 
@@ -6337,25 +6424,39 @@ async function applySupabaseSession(session) {
 }
 
 async function clockOutActiveSession(message = 'Clocked out. Nice work.') {
-  if (!state.running || longSessionClockOutPending) return;
+  if (longSessionClockOutPending) return false;
+  if (!state.running) await refreshOwnActiveSessionFromSupabase();
+  if (!state.running) {
+    showToast('No active shift is currently open for this employee.');
+    return false;
+  }
   longSessionClockOutPending = true;
-  const running = state.running;
-  const end = Date.now();
-  await completeSupabaseTimeEntry(end);
-  await loadSupabaseTimeEntries();
-  state.entries.unshift({ task: running.task, seconds: secondsBetween(running.start, end), start: running.start, end, timeEntryId: running.timeEntryId || null });
-  state.clockOut = end;
-  state.running = null;
-  longSessionDeadline = null;
-  $('#longSessionBackdrop').hidden = true;
-  if (interval) clearInterval(interval);
-  interval = null;
-  removeLivePresence(currentAccount.email);
-  save();
-  syncOwnLivePresence();
-  render();
-  longSessionClockOutPending = false;
-  showToast(message);
+  try {
+    const running = state.running;
+    const end = Date.now();
+    const completed = await completeSupabaseTimeEntry(end);
+    if (usesSupabase() && !completed?.ok) {
+      await refreshOwnActiveSessionFromSupabase();
+      render();
+      return false;
+    }
+    await loadSupabaseTimeEntries();
+    state.entries.unshift({ task: running.task, note: running.note || '', seconds: secondsBetween(running.start, end), start: running.start, end, timeEntryId: completed?.id || running.timeEntryId || null });
+    state.clockOut = end;
+    state.running = null;
+    longSessionDeadline = null;
+    $('#longSessionBackdrop').hidden = true;
+    if (interval) clearInterval(interval);
+    interval = null;
+    removeLivePresence(currentAccount.email);
+    save();
+    syncOwnLivePresence();
+    render();
+    showToast(message);
+    return true;
+  } finally {
+    longSessionClockOutPending = false;
+  }
 }
 
 function reconcileAdminClockOut() {
@@ -6498,31 +6599,41 @@ function checkLongSession() {
 
 $('#toggleTimer').onclick = async () => {
   if (currentAccount?.role !== 'employee') return;
-  const button = $('#toggleTimer');
-  button.disabled = true;
+  if (timerActionPending) return;
+  timerActionPending = true;
+  timerActionLabel = state.running ? 'Clocking out...' : 'Clocking in...';
+  render();
   try {
     await refreshOwnActiveSessionFromSupabase();
     if (state.running) {
-      await clockOutActiveSession();
-      if ($('#taskNoteInput')) $('#taskNoteInput').value = '';
+      timerActionLabel = 'Clocking out...';
+      render();
+      const clockedOut = await clockOutActiveSession();
+      if (clockedOut && $('#taskNoteInput')) $('#taskNoteInput').value = '';
       return;
     } else {
       const task = $('#taskInput').value || 'Untitled task';
-      const note = $('#taskNoteInput').value.trim();
+      const note = $('#taskNoteInput')?.value?.trim() || '';
       const start = Date.now();
-      const timeEntry = await createSupabaseTimeEntry(task, start);
+      timerActionLabel = 'Clocking in...';
+      render();
+      const timeEntry = await createSupabaseTimeEntry(task, start, note);
       if (usesSupabase() && !timeEntry) return;
       await loadSupabaseTimeEntries();
       const runningStart = timeEntry?.start || start;
       const runningTask = timeEntry?.task || task;
-      state.running = { task: runningTask, note, start: runningStart, timeEntryId: timeEntry?.id || null, nextLongSessionCheckAt: runningStart + LONG_SESSION_SECONDS * 1000 };
+      state.running = { task: runningTask, note: timeEntry?.note ?? note, start: runningStart, timeEntryId: timeEntry?.id || null, nextLongSessionCheckAt: runningStart + LONG_SESSION_SECONDS * 1000 };
       state.clockIn = state.clockIn || runningStart;
       state.clockOut = null;
       syncOwnLivePresence();
       showToast(timeEntry?.resumed ? 'Existing active shift resumed. You are clocked in.' : 'Clocked in.');
     }
+  } catch (error) {
+    showToast(`Timer error: ${error.message || error}`);
   } finally {
-    button.disabled = false;
+    timerActionPending = false;
+    timerActionLabel = '';
+    render();
   }
   if (interval) clearInterval(interval);
   if (state.running || state.lunch) interval = setInterval(render, 1000);
@@ -6572,9 +6683,14 @@ $('#taskInput').onchange = async () => {
   const previousRunning = { ...state.running };
   if (usesSupabase() && crossesDualAssignmentBoundary(previousRunning.task, nextTask)) {
     const switchAt = Date.now();
-    await completeSupabaseTimeEntry(switchAt);
+    const completed = await completeSupabaseTimeEntry(switchAt);
+    if (!completed?.ok) {
+      await refreshOwnActiveSessionFromSupabase();
+      render();
+      return;
+    }
     await loadSupabaseTimeEntries();
-    const nextEntry = await createSupabaseTimeEntry(nextTask, switchAt);
+    const nextEntry = await createSupabaseTimeEntry(nextTask, switchAt, previousRunning.note || '');
     if (!nextEntry) {
       await refreshOwnActiveSessionFromSupabase();
       render();
@@ -6591,7 +6707,7 @@ $('#taskInput').onchange = async () => {
     const runningStart = nextEntry.start || switchAt;
     state.running = {
       task: nextEntry.task || nextTask,
-      note: previousRunning.note || '',
+      note: nextEntry.note ?? previousRunning.note ?? '',
       start: runningStart,
       timeEntryId: nextEntry.id || null,
       nextLongSessionCheckAt: runningStart + LONG_SESSION_SECONDS * 1000
@@ -6614,6 +6730,8 @@ $('#taskNoteInput').oninput = () => {
   if (!state.running) return;
   state.running.note = $('#taskNoteInput').value.trim();
   save();
+  if (runningActivitySyncTimer) clearTimeout(runningActivitySyncTimer);
+  runningActivitySyncTimer = setTimeout(() => updateSupabaseRunningTask(state.running.task), 500);
   syncOwnLivePresence();
 };
 
