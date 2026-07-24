@@ -2516,10 +2516,11 @@ function parseEmployeeRate(value) {
 
 function isEdgeFunctionRequestFailure(error) {
   const message = String(error?.message || error || '').toLowerCase();
+  if (message.includes('user not found') || message.includes('auth update failed')) return false;
   return message.includes('failed to send a request') ||
     message.includes('failed to fetch') ||
     message.includes('network') ||
-    message.includes('not found') ||
+    (message.includes('not found') && message.includes('functions')) ||
     message.includes('functions/v1');
 }
 
@@ -2682,15 +2683,29 @@ async function upsertSupabaseEmployee(record) {
   const passwordChanged = Boolean(record.newPassword);
   let data = null;
   let error = null;
+  let detailedMessage = '';
   try {
-    const response = await supabaseClient.functions.invoke('admin-save-employee', { body: payload });
-    data = response.data;
-    error = response.error;
+    data = await invokeEdgeFunction('admin-save-employee', payload);
   } catch (requestError) {
     error = requestError;
+    detailedMessage = requestError?.message || String(requestError || '');
+  }
+  if ((error || !data?.ok) && /user not found/i.test(detailedMessage) && payload.employeeId) {
+    try {
+      data = await invokeEdgeFunction('admin-save-employee', {
+        ...payload,
+        employeeId: null,
+        repairMissingAuthUser: true
+      });
+      error = null;
+      detailedMessage = '';
+    } catch (retryError) {
+      error = retryError;
+      detailedMessage = `${detailedMessage || 'Auth user was not found.'} Retry as a new Auth user failed: ${retryError?.message || retryError}`;
+    }
   }
   if (error || !data?.ok) {
-    const detailedMessage = await supabaseFunctionErrorMessage(error, data);
+    detailedMessage = detailedMessage || await supabaseFunctionErrorMessage(error, data);
     if (isEdgeFunctionRequestFailure(error) && isUuid(record.id) && !emailChanged && !passwordChanged) {
       const directResult = await updateSupabaseEmployeeProfileDirect(record);
       if (directResult.ok) return directResult;
