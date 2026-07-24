@@ -2659,8 +2659,12 @@ async function updateSupabaseEmployeeProfileDirect(record) {
 
 async function upsertSupabaseEmployee(record) {
   if (!supabaseClient || currentProfile?.role !== 'admin') return { ok: false, error: 'Admin Supabase session required.' };
+  const existingProfileForRecord = supabaseProfiles.find(profile =>
+    (isUuid(record.id) && profile.id === record.id) ||
+    profile.email?.toLowerCase() === String(record.previousEmail || record.email || '').toLowerCase()
+  );
   const payload = {
-    employeeId: isUuid(record.id) ? record.id : null,
+    employeeId: existingProfileForRecord?.id || null,
     fullName: record.name,
     email: record.email,
     jobRole: record.jobRole,
