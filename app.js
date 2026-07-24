@@ -626,6 +626,16 @@ function rememberOffboardedEmployee(employee = {}, meta = {}) {
   localStorage.setItem('sync2time-offboarded-employees', JSON.stringify(localOffboardedEmployees));
 }
 
+function forgetOffboardedEmployee(employee = {}) {
+  const id = String(employee.id || '').trim();
+  const email = String(employee.email || '').trim().toLowerCase();
+  if (id && localOffboardedEmployees[id]) delete localOffboardedEmployees[id];
+  Object.entries(localOffboardedEmployees || {}).forEach(([key, value]) => {
+    if (String(value?.email || '').trim().toLowerCase() === email) delete localOffboardedEmployees[key];
+  });
+  localStorage.setItem('sync2time-offboarded-employees', JSON.stringify(localOffboardedEmployees));
+}
+
 function updateAccountChrome(account = currentAccount, profile = currentProfile) {
   if (!account) return;
   $('#accessChip').innerHTML = `<i></i> ${account.role === 'admin' ? 'Admin' : 'Employee'} access`;
@@ -3128,10 +3138,11 @@ function renderTeamDirectory() {
     );
     const editAction = `<button class="edit-employee-btn" data-edit-employee="${person.id || ''}" data-edit-email="${encodeURIComponent(person.email || '')}" data-edit-name="${encodeURIComponent(person.name)}">Edit</button>`;
     const offboardAction = `<button class="offboard-employee-btn" data-offboard-employee="${person.id || ''}" data-offboard-email="${encodeURIComponent(person.email || '')}" data-offboard-name="${encodeURIComponent(person.name)}" ${isOffboarded ? 'disabled' : ''}>${isOffboarded ? 'Offboarded' : 'Offboard'}</button>`;
+    const deleteAction = `<button class="delete-employee-btn" data-delete-employee="${person.id || ''}" data-delete-email="${encodeURIComponent(person.email || '')}" data-delete-name="${encodeURIComponent(person.name)}">Delete</button>`;
     const passwordLine = access?.tempPassword ? `<small>${access.email} · Pass: ${access.tempPassword}</small>` : `<small>${person.department || 'Employee'}</small>`;
     const clockOutAction = live ? `<button class="admin-clockout-btn" data-admin-clockout="${person.id || ''}" data-clockout-email="${encodeURIComponent(person.email || '')}" data-clockout-name="${encodeURIComponent(person.name)}">Clock out</button>` : '<button class="admin-clockout-btn" disabled>Not working</button>';
     const clearAction = `<button class="clear-time-btn" data-clear-employee-time="${person.id || ''}" data-clear-time-email="${encodeURIComponent(person.email || '')}" data-clear-time-name="${encodeURIComponent(person.name)}">Clear dry-run time</button>`;
-    const action = `<span class="team-actions">${editAction}${offboardAction}${clockOutAction}${clearAction}</span>`;
+    const action = `<span class="team-actions">${editAction}${offboardAction}${deleteAction}${clockOutAction}${clearAction}</span>`;
     const accessActive = !!(access || hasSupabaseAccess);
     const accessLabel = isOffboarded ? 'Offboarded' : accessActive ? 'Access active' : 'No access';
     const accessClass = isOffboarded ? 'pending' : accessActive ? '' : 'pending';
@@ -4564,6 +4575,17 @@ function visibleElement(element) {
   return Boolean(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
 }
 
+function modalBackdropOpen() {
+  return $$('.modal-backdrop').some(backdrop => !backdrop.hidden && visibleElement(backdrop));
+}
+
+function suppressHorizontalScrollControls() {
+  document.body.classList.toggle('modal-open', modalBackdropOpen());
+  if (!modalBackdropOpen()) return false;
+  $$('.table-scroll-controls').forEach(control => control.remove());
+  return true;
+}
+
 function labelForWideScroller(scroller) {
   const section = scroller.closest('section');
   const heading = section?.querySelector('.section-title h2, h2, h3')?.textContent?.trim();
@@ -4618,6 +4640,8 @@ function bindHorizontalScrollControls(scroller, controls) {
 
 function ensureHorizontalScrollControls() {
   horizontalScrollQueued = false;
+  if (suppressHorizontalScrollControls()) return;
+  document.body.classList.remove('modal-open');
   const seen = new Set();
   WIDE_TABLE_SCROLL_SELECTORS.forEach(selector => {
     $$(selector).forEach(scroller => {
@@ -4657,6 +4681,7 @@ function ensureHorizontalScrollControls() {
 }
 
 function queueHorizontalScrollControls() {
+  if (suppressHorizontalScrollControls()) return;
   if (horizontalScrollQueued) return;
   horizontalScrollQueued = true;
   requestAnimationFrame(ensureHorizontalScrollControls);
@@ -6270,47 +6295,119 @@ function openEmployeeEditor(identifier = '', email = '', name = '') {
   openEmployeeForm(employee);
 }
 
-async function offboardEmployeeAccess(identifier = '', email = '', name = '') {
+function employeeByIdentifier(identifier = '', email = '', name = '') {
   const normalizedEmail = String(email || '').toLowerCase();
   const normalizedName = String(name || '').toLowerCase();
-  const employee = editableEmployeeRecords().find(item =>
+  return editableEmployeeRecords().find(item =>
     (identifier && item.id === identifier) ||
     (normalizedEmail && item.email?.toLowerCase() === normalizedEmail) ||
     (normalizedName && item.name?.toLowerCase() === normalizedName)
   );
+}
+
+function setActionButtonBusy(button, busyText = 'Working…') {
+  if (!button) return () => {};
+  if (button.dataset.busy === 'true') return null;
+  const originalText = button.textContent;
+  const originalDisabled = button.disabled;
+  button.dataset.busy = 'true';
+  button.disabled = true;
+  button.textContent = busyText;
+  return () => {
+    button.dataset.busy = '';
+    button.disabled = originalDisabled;
+    button.textContent = originalText;
+  };
+}
+
+async function offboardEmployeeAccess(identifier = '', email = '', name = '', actionButton = null) {
+  const employee = employeeByIdentifier(identifier, email, name);
   if (!employee) return showToast('Employee record not found.');
-  const confirmMessage = `Please confirm ${employee.name} has completed the offboarding process.\n\nThis will remove Sync2Time sign-in access while preserving historical attendance, payroll, and request records.`;
+  const confirmMessage = `Confirm employee offboarding for ${employee.name}?\n\nThis removes Sync2Time sign-in access while preserving attendance, payroll, and request history.`;
   if (!confirm(confirmMessage)) return;
-  if (usesSupabase()) {
-    let data;
-    try {
+  const releaseButton = setActionButtonBusy(actionButton, 'Offboarding…');
+  if (releaseButton === null) return showToast('Offboarding is already processing. Please wait.');
+  try {
+    if (usesSupabase()) {
+      let data;
       data = await invokeEdgeFunction('admin-offboard-employee', {
         employeeId: employee.id,
         email: employee.email
       });
-    } catch (error) {
-      return showToast(`Offboarding error: ${error.message || error}`);
+      rememberOffboardedEmployee(employee, {
+        employeeId: data.employeeId || employee.id,
+        email: data.profile?.email || employee.email,
+        name: data.profile?.full_name || employee.name,
+        offboardedAt: data.offboardedAt
+      });
+      managedEmployees = managedEmployees.filter(item => item.id !== employee.id);
+      persistEmployees();
+      await refreshSupabaseData();
+      renderManagedEmployees();
+      renderTeamDirectory();
+      showToast(`${employee.name} was offboarded and access was removed.${data.warning ? ` Note: ${data.warning}` : ''}`);
+      return;
     }
-    rememberOffboardedEmployee(employee, {
-      employeeId: data.employeeId || employee.id,
-      email: data.profile?.email || employee.email,
-      name: data.profile?.full_name || employee.name,
-      offboardedAt: data.offboardedAt
-    });
+    rememberOffboardedEmployee(employee);
     managedEmployees = managedEmployees.filter(item => item.id !== employee.id);
     persistEmployees();
-    await refreshSupabaseData();
     renderManagedEmployees();
     renderTeamDirectory();
-    showToast(`${employee.name} was offboarded and access was removed.${data.warning ? ` Note: ${data.warning}` : ''}`);
-    return;
+    showToast(`${employee.name}'s access was removed.`);
+  } catch (error) {
+    const message = isEdgeFunctionRequestFailure(error)
+      ? edgeFunctionDeployMessage('admin-offboard-employee')
+      : (error.message || String(error));
+    showToast(`Offboarding error: ${message}`);
+  } finally {
+    if (releaseButton) releaseButton();
   }
-  rememberOffboardedEmployee(employee);
-  managedEmployees = managedEmployees.filter(item => item.id !== employee.id);
-  persistEmployees();
-  renderManagedEmployees();
-  renderTeamDirectory();
-  showToast(`${employee.name}'s access was removed.`);
+}
+
+async function deleteEmployeeAccess(identifier = '', email = '', name = '', actionButton = null) {
+  const employee = employeeByIdentifier(identifier, email, name);
+  if (!employee) return showToast('Employee record not found.');
+  const confirmMessage = `Permanently delete ${employee.name} from Sync2Time?\n\nUse this only for accidental/newly onboarded employees. If this employee already has attendance, payroll, leave, time edit, overtime, or document history, Sync2Time will block deletion and you should Offboard instead.`;
+  if (!confirm(confirmMessage)) return;
+  const typed = prompt(`Type DELETE to permanently delete ${employee.name}.`);
+  if (typed !== 'DELETE') return showToast('Permanent delete cancelled.');
+  const releaseButton = setActionButtonBusy(actionButton, 'Deleting…');
+  if (releaseButton === null) return showToast('Employee delete is already processing. Please wait.');
+  try {
+    if (usesSupabase()) {
+      await invokeEdgeFunction('admin-delete-employee', {
+        employeeId: employee.id,
+        email: employee.email
+      });
+      managedEmployees = managedEmployees.filter(item =>
+        item.id !== employee.id &&
+        String(item.email || '').toLowerCase() !== String(employee.email || '').toLowerCase()
+      );
+      forgetOffboardedEmployee(employee);
+      persistEmployees();
+      await refreshSupabaseData();
+      renderManagedEmployees();
+      renderTeamDirectory();
+      showToast(`${employee.name} was permanently deleted.`);
+      return;
+    }
+    managedEmployees = managedEmployees.filter(item =>
+      item.id !== employee.id &&
+      String(item.email || '').toLowerCase() !== String(employee.email || '').toLowerCase()
+    );
+    forgetOffboardedEmployee(employee);
+    persistEmployees();
+    renderManagedEmployees();
+    renderTeamDirectory();
+    showToast(`${employee.name} was deleted from this browser.`);
+  } catch (error) {
+    const message = isEdgeFunctionRequestFailure(error)
+      ? edgeFunctionDeployMessage('admin-delete-employee')
+      : (error.message || String(error));
+    showToast(`Delete employee error: ${message}`);
+  } finally {
+    if (releaseButton) releaseButton();
+  }
 }
 
 function closeEmployeeForm() {
@@ -7159,11 +7256,18 @@ $('#editEmployee').onclick = () => {
   if (!id) return showToast('Choose an employee first.');
   openEmployeeEditor(id);
 };
-$('#deleteEmployee').onclick = () => {
+$('#deleteEmployee').onclick = event => {
   const id = $('#manageEmployeeSelect').value;
   if (!id) return showToast('Choose an employee first.');
-  offboardEmployeeAccess(id);
+  offboardEmployeeAccess(id, '', '', event.currentTarget);
 };
+if ($('#permanentDeleteEmployee')) {
+  $('#permanentDeleteEmployee').onclick = event => {
+    const id = $('#manageEmployeeSelect').value;
+    if (!id) return showToast('Choose an employee first.');
+    deleteEmployeeAccess(id, '', '', event.currentTarget);
+  };
+}
 
 $('#employeeModalClose').onclick = closeEmployeeForm;
 $('#employeeModalCancel').onclick = closeEmployeeForm;
@@ -7456,6 +7560,13 @@ if ($('main')) {
     subtree: true
   });
 }
+$$('.modal-backdrop').forEach(backdrop => {
+  new MutationObserver(() => {
+    if (suppressHorizontalScrollControls()) return;
+    document.body.classList.remove('modal-open');
+    queueHorizontalScrollControls();
+  }).observe(backdrop, { attributes: true, attributeFilter: ['hidden'] });
+});
 
 function csvCell(value) {
   return `"${String(value ?? '').replaceAll('"', '""')}"`;
@@ -7576,7 +7687,7 @@ $('#projectClear').onclick = () => {
 
 ['liveTeamRows', 'scheduleRows', 'projectRows', 'teamRows', 'attendanceRows'].forEach(id => {
   $(`#${id}`).onclick = event => {
-    if (event.target.closest('[data-delete-time], [data-admin-clockout], [data-clear-employee-time], [data-offboard-employee], [data-edit-employee]')) return;
+    if (event.target.closest('[data-delete-time], [data-admin-clockout], [data-clear-employee-time], [data-offboard-employee], [data-delete-employee], [data-edit-employee]')) return;
     const row = event.target.closest('[data-employee]');
     if (row) openEmployeeDetail(decodeURIComponent(row.dataset.employee));
   };
@@ -7741,7 +7852,19 @@ document.body.addEventListener('click', async event => {
     await offboardEmployeeAccess(
       offboardEmployee.dataset.offboardEmployee || '',
       decodeURIComponent(offboardEmployee.dataset.offboardEmail || ''),
-      decodeURIComponent(offboardEmployee.dataset.offboardName || '')
+      decodeURIComponent(offboardEmployee.dataset.offboardName || ''),
+      offboardEmployee
+    );
+    return;
+  }
+  const deleteEmployee = event.target.closest('[data-delete-employee]');
+  if (deleteEmployee) {
+    event.stopPropagation();
+    await deleteEmployeeAccess(
+      deleteEmployee.dataset.deleteEmployee || '',
+      decodeURIComponent(deleteEmployee.dataset.deleteEmail || ''),
+      decodeURIComponent(deleteEmployee.dataset.deleteName || ''),
+      deleteEmployee
     );
     return;
   }
