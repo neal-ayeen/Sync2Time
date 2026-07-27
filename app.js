@@ -3876,9 +3876,8 @@ function openReportDetail(employeeId, name = '') {
   $('#reportDetailEntryCount').textContent = rows.reduce((sum, row) => sum + row.entries, 0);
   $('#reportDetailDayCount').textContent = rows.length;
   $('#reportDetailRows').innerHTML = rows.map(row => {
-    const actions = projectFilter === 'All'
-      ? `<span class="report-day-actions"><button class="edit-adjustment-btn" type="button" data-edit-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}">Edit day</button><button class="clear-time-btn" type="button" data-delete-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}">Delete day</button></span>`
-      : '<span class="project-filter-note">Project view</span>';
+    const encodedProject = encodeURIComponent(projectFilter);
+    const actions = `<span class="report-day-actions"><button class="edit-adjustment-btn" type="button" data-edit-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}" data-report-day-project="${encodedProject}">Edit day</button><button class="clear-time-btn" type="button" data-delete-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}" data-report-day-project="${encodedProject}">Delete day</button></span>`;
     return `<div class="report-row employee-hours-row report-detail-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span>${escapeHtml([...new Set(row.tasks)].join(', '))}</span>${actions}</div>`;
   }).join('') || '<div class="empty-state">No hours found for this employee in the selected period.</div>';
   $('#reportDetailBackdrop').hidden = false;
@@ -7882,9 +7881,14 @@ async function createAdminDayAdjustmentNotice({ employeeId, employeeName, type, 
   return true;
 }
 
-function reportDayTimeEntries(employeeId, dateKey) {
+function reportDayTimeEntries(employeeId, dateKey, projectFilter = 'All') {
   return supabaseTimeEntries
-    .filter(entry => entry.employee_id === employeeId && entry.clock_in && isoDate(new Date(entry.clock_in)) === dateKey)
+    .filter(entry =>
+      entry.employee_id === employeeId &&
+      entry.clock_in &&
+      isoDate(new Date(entry.clock_in)) === dateKey &&
+      (projectFilter === 'All' || nameKey(projectNameForTimeEntry(entry) || 'Uncategorized') === nameKey(projectFilter))
+    )
     .sort((left, right) => new Date(left.clock_in) - new Date(right.clock_in));
 }
 
@@ -7911,8 +7915,8 @@ async function markTimeEntryIdsDeleted(employeeId, ids = []) {
   return { ok: true, deletedIds: safeIds };
 }
 
-async function markReportDayEntriesDeleted(employeeId, dateKey) {
-  const entries = reportDayTimeEntries(employeeId, dateKey);
+async function markReportDayEntriesDeleted(employeeId, dateKey, projectFilter = 'All') {
+  const entries = reportDayTimeEntries(employeeId, dateKey, projectFilter);
   const ids = entries.map(entry => entry.id).filter(Boolean);
   if (!ids.length) return { ok: true, entries, deletedIds: [] };
   const deleted = await markTimeEntryIdsDeleted(employeeId, ids);
@@ -7938,6 +7942,7 @@ async function refreshAfterReportDayTimeChange(employeeId, employeeName) {
   renderAdjustmentCenter();
   renderLiveTeam();
   renderScheduleWatch();
+  renderProjects();
   renderAuditLog();
   renderDeletedTimeAlerts();
   openReportDetail(employeeId, employeeName);
@@ -7949,12 +7954,21 @@ async function editReportDayHours(button) {
   const employeeName = decodeURIComponent(button.dataset.reportDayName || 'Employee');
   const dateKey = button.dataset.editReportDay;
   const dateLabel = decodeURIComponent(button.dataset.reportDayLabel || dateKey || 'selected day');
+  const projectScope = decodeURIComponent(button.dataset.reportDayProject || 'All');
   const currentSeconds = Number(button.dataset.reportDaySeconds || 0);
   const roundedMinutes = Math.max(0, Math.min(1440, Math.round(currentSeconds / 60)));
+  const scopedEntries = reportDayTimeEntries(employeeId, dateKey, projectScope);
+  const currentProject = projectScope === 'All'
+    ? projectNameForTimeEntry(scopedEntries[0]) || taskOptions[0] || 'Coaching'
+    : projectScope;
   ensureReportDayDurationOptions();
-  pendingReportDayEdit = { button, employeeId, employeeName, dateKey, dateLabel, currentSeconds };
+  const projectSelect = $('#reportDayEditProject');
+  const availableProjects = [...new Set([currentProject, ...taskOptions].filter(project => project && project !== 'All' && project !== 'Uncategorized'))];
+  projectSelect.innerHTML = availableProjects.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
+  projectSelect.value = availableProjects.includes(currentProject) ? currentProject : availableProjects[0];
+  pendingReportDayEdit = { button, employeeId, employeeName, dateKey, dateLabel, currentSeconds, projectScope, currentProject };
   $('#reportDayEditEmployee').textContent = employeeName;
-  $('#reportDayEditDate').textContent = dateLabel;
+  $('#reportDayEditDate').textContent = `${dateLabel} · ${projectScope === 'All' ? 'All project entries' : projectScope}`;
   $('#reportDayEditCurrent').textContent = formatDuration(currentSeconds);
   $('#reportDayEditHours').value = String(Math.floor(roundedMinutes / 60));
   $('#reportDayEditMinutes').value = String(roundedMinutes % 60);
@@ -7968,9 +7982,10 @@ async function editReportDayHours(button) {
 async function submitReportDayHoursEdit(event) {
   event.preventDefault();
   if (currentAccount?.role !== 'admin' || !pendingReportDayEdit) return;
-  const { button, employeeId, employeeName, dateKey, dateLabel, currentSeconds } = pendingReportDayEdit;
+  const { button, employeeId, employeeName, dateKey, dateLabel, currentSeconds, projectScope, currentProject } = pendingReportDayEdit;
   const hourPart = Number($('#reportDayEditHours').value);
   const minutePart = Number($('#reportDayEditMinutes').value);
+  const selectedProject = $('#reportDayEditProject').value;
   const reason = $('#reportDayEditReason').value.trim();
   const errorBox = $('#reportDayEditError');
   if (!Number.isInteger(hourPart) || !Number.isInteger(minutePart) || hourPart < 0 || hourPart > 24 || minutePart < 0 || minutePart > 59 || (hourPart === 24 && minutePart !== 0)) {
@@ -7983,13 +7998,18 @@ async function submitReportDayHoursEdit(event) {
     errorBox.hidden = false;
     return;
   }
+  if (!selectedProject || !taskOptions.some(project => nameKey(project) === nameKey(selectedProject))) {
+    errorBox.textContent = 'Choose a valid project for this corrected time.';
+    errorBox.hidden = false;
+    return;
+  }
   const nextSeconds = (hourPart * 60 + minutePart) * 60;
   errorBox.hidden = true;
   const saveButton = $('#reportDayEditSave');
   saveButton.disabled = true;
   saveButton.textContent = 'Saving…';
   button.disabled = true;
-  const entries = reportDayTimeEntries(employeeId, dateKey);
+  const entries = reportDayTimeEntries(employeeId, dateKey, projectScope);
   let deletedIds = [];
   let correctedTimeEntryId = '';
   if (usesSupabase() && nextSeconds > 0) {
@@ -7999,7 +8019,7 @@ async function submitReportDayHoursEdit(event) {
     const end = new Date(start.getTime() + nextSeconds * 1000);
     const correctedPayload = {
       employee_id: employeeId,
-      task: serializeLiveActivity(firstActivity.task || 'Admin corrected hours', `${reason} · corrected from ${formatDuration(currentSeconds)} to ${formatDuration(nextSeconds)}`),
+      task: serializeLiveActivity(selectedProject, [firstActivity.note, `${reason} · corrected from ${formatDuration(currentSeconds)} to ${formatDuration(nextSeconds)}`].filter(Boolean).join(' · ')),
       clock_in: start.toISOString(),
       clock_out: end.toISOString(),
       status: 'completed'
@@ -8035,7 +8055,7 @@ async function submitReportDayHoursEdit(event) {
       await supabaseClient.from('live_presence').delete().eq('employee_id', employeeId);
     }
   } else {
-    const deletion = await markReportDayEntriesDeleted(employeeId, dateKey);
+    const deletion = await markReportDayEntriesDeleted(employeeId, dateKey, projectScope);
     if (!deletion.ok) {
       button.disabled = false;
       saveButton.disabled = false;
@@ -8049,8 +8069,8 @@ async function submitReportDayHoursEdit(event) {
     employeeName,
     type: 'admin_day_edit',
     title: 'Daily hours edited by admin',
-    message: `${employeeName}'s ${dateLabel} hours were edited by HR Admin from ${formatDuration(currentSeconds)} to ${formatDuration(nextSeconds)}. Reason: ${reason}`,
-    meta: { dateKey, dateLabel, previousSeconds: currentSeconds, newSeconds: nextSeconds, reason, correctedTimeEntryId, replacedTimeEntryIds: deletedIds }
+    message: `${employeeName}'s ${dateLabel} ${projectScope === 'All' ? 'logged time' : projectScope + ' time'} was edited by HR Admin from ${formatDuration(currentSeconds)} to ${formatDuration(nextSeconds)} and assigned to ${selectedProject}. Reason: ${reason}`,
+    meta: { dateKey, dateLabel, projectScope, previousProject: currentProject, newProject: selectedProject, previousSeconds: currentSeconds, newSeconds: nextSeconds, reason, correctedTimeEntryId, replacedTimeEntryIds: deletedIds }
   });
   closeReportDayHoursEditor();
   await refreshAfterReportDayTimeChange(employeeId, employeeName);
@@ -8065,11 +8085,14 @@ async function deleteReportDayHours(button) {
   const employeeName = decodeURIComponent(button.dataset.reportDayName || 'Employee');
   const dateKey = button.dataset.deleteReportDay;
   const dateLabel = decodeURIComponent(button.dataset.reportDayLabel || dateKey || 'selected day');
+  const projectScope = decodeURIComponent(button.dataset.reportDayProject || 'All');
   const currentSeconds = Number(button.dataset.reportDaySeconds || 0);
-  if (!confirm(`Delete all logged time for ${employeeName} on ${dateLabel}? The employee will be notified.`)) return;
+  const scopeLabel = projectScope === 'All' ? 'all logged time' : `all ${projectScope} time`;
+  const preservationNote = projectScope === 'All' ? '' : ' Other project entries will remain.';
+  if (!confirm(`Delete ${scopeLabel} for ${employeeName} on ${dateLabel}?${preservationNote} The employee will be notified.`)) return;
   const reason = prompt('Reason for deleting this day', 'Admin removed incorrect daily hours') || 'Admin removed incorrect daily hours';
   button.disabled = true;
-  const deletion = await markReportDayEntriesDeleted(employeeId, dateKey);
+  const deletion = await markReportDayEntriesDeleted(employeeId, dateKey, projectScope);
   if (!deletion.ok) {
     button.disabled = false;
     return showToast(`Delete day error: ${deletion.error}`);
@@ -8079,8 +8102,8 @@ async function deleteReportDayHours(button) {
     employeeName,
     type: 'admin_day_delete',
     title: 'Daily hours deleted by admin',
-    message: `${employeeName}'s ${dateLabel} logged time (${formatDuration(currentSeconds)}) was deleted by HR Admin.${reason ? ' Reason: ' + reason : ''}`,
-    meta: { dateKey, dateLabel, previousSeconds: currentSeconds, reason, deletedTimeEntryIds: deletion.deletedIds }
+    message: `${employeeName}'s ${dateLabel} ${projectScope === 'All' ? 'logged time' : projectScope + ' time'} (${formatDuration(currentSeconds)}) was deleted by HR Admin.${reason ? ' Reason: ' + reason : ''}`,
+    meta: { dateKey, dateLabel, projectScope, previousSeconds: currentSeconds, reason, deletedTimeEntryIds: deletion.deletedIds }
   });
   await refreshAfterReportDayTimeChange(employeeId, employeeName);
   showToast(`${employeeName}'s ${dateLabel} hours were deleted.`);
