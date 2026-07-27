@@ -3142,6 +3142,13 @@ function projectReportRange() {
   return { startKey, endKey };
 }
 
+function projectEmployeeMatches(person = {}) {
+  const term = nameKey($('#projectEmployeeSearch')?.value || '');
+  if (!term) return true;
+  return [person.name, person.email, person.role, person.department]
+    .some(value => nameKey(value).includes(term));
+}
+
 function buildProjectReportRows() {
   const { startKey, endKey } = projectReportRange();
   const groups = new Map();
@@ -3153,6 +3160,7 @@ function buildProjectReportRows() {
     const project = projectNameForTimeEntry(entry);
     if (!project || (selectedProject !== 'All' && nameKey(project) !== nameKey(selectedProject))) return;
     const person = attendanceRecordFromSupabase(entry, index);
+    if (!projectEmployeeMatches(person)) return;
     const employeeId = entry.employee_id || person.employeeId || person.email;
     const key = `${dateKey}|${employeeId}|${nameKey(project)}`;
     const existing = groups.get(key) || {
@@ -3232,7 +3240,10 @@ function renderProjects() {
     const assignedProject = projectFor(person, index);
     const usedSelectedProject = selectedProject !== 'All' && usedByEmployee.has(realEmployeeId(person));
     return { person, project: usedSelectedProject ? selectedProject : assignedProject, usedSelectedProject };
-  }).filter(item => selectedProject === 'All' || nameKey(item.project) === nameKey(selectedProject) || item.usedSelectedProject);
+  }).filter(item =>
+    projectEmployeeMatches(item.person) &&
+    (selectedProject === 'All' || nameKey(item.project) === nameKey(selectedProject) || item.usedSelectedProject)
+  );
   $('#projectRows').innerHTML = rows.map(({ person, project }) => `<div class="project-row" role="button" tabindex="0" data-employee="${encodeURIComponent(person.name)}"><div class="person"><span class="person-avatar" style="background:${person.color}">${person.initials}</span><span>${person.name}<small>${person.role}</small></span></div><span class="project-tag">${project}</span><span>${person.task}</span><span class="schedule-shift">${person.schedule}</span><span class="status ${person.status === 'clocked' ? 'active' : 'complete'}">${person.status === 'clocked' ? '● Working' : 'Complete'}</span></div>`).join('') || '<div class="empty-state">No employees in this project category.</div>';
   $('#projectCount').textContent = `${rows.length} assignment${rows.length === 1 ? '' : 's'}`;
 }
@@ -8046,10 +8057,15 @@ $('#projectOptions').onclick = event => {
 };
 $('#projectReportStart').onchange = renderProjects;
 $('#projectReportEnd').onchange = renderProjects;
+$('#projectEmployeeSearch').oninput = renderProjects;
+$('#projectEmployeeSearchClear').onclick = () => {
+  $('#projectEmployeeSearch').value = '';
+  renderProjects();
+  $('#projectEmployeeSearch').focus();
+};
 
-$('#projectForm').onsubmit = async event => {
-  event.preventDefault();
-  const project = $('#projectName').value.trim();
+async function addProjectFromHeader() {
+  const project = String(prompt('Enter the new project name') || '').trim();
   if (!project) return;
   if (taskOptions.some(item => item.toLowerCase() === project.toLowerCase())) return showToast('That project already exists.');
   if (usesSupabase()) {
@@ -8063,15 +8079,16 @@ $('#projectForm').onsubmit = async event => {
     taskOptions.push(project);
     persistProjects();
   }
-  $('#projectForm').reset();
   selectedProject = project;
   renderProjectOptions();
   renderProjects();
   showToast(`${project} project added.`);
-};
+}
+$('#projectAddPrompt').onclick = addProjectFromHeader;
 
 $('#projectClear').onclick = () => {
   selectedProject = 'All';
+  $('#projectEmployeeSearch').value = '';
   $$('[data-project]').forEach(item => item.classList.toggle('active', item.dataset.project === 'All'));
   renderProjects();
 };

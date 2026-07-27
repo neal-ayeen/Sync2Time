@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260727-project-daily-report-3" />
+  <link rel="stylesheet" href="styles.css?v=20260727-project-employee-search-4" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -149,9 +149,9 @@
     </section>
 
     <section class="projects-section" id="projects">
-      <div class="section-title"><div><p class="eyebrow">PROJECTS</p><h2>Team work by category</h2><p>Choose a category to see who is assigned and what they are doing.</p></div><button class="export" id="projectClear">Clear filter</button></div>
+      <div class="section-title"><div><p class="eyebrow">PROJECTS</p><h2>Team work by category</h2><p>Choose a category to see who is assigned and what they are doing.</p></div><div class="header-actions"><button class="secondary project-add-compact" id="projectAddPrompt" type="button">+ Add project</button><button class="export" id="projectClear">Clear filter</button></div></div>
       <div class="project-options" id="projectOptions"><button class="project-option active" data-project="All"><i></i>All work</button><button class="project-option" data-project="Coaching"><i></i>Coaching</button><button class="project-option" data-project="Meeting"><i></i>Meeting</button><button class="project-option" data-project="On Class"><i></i>On Class</button><button class="project-option" data-project="Admin"><i></i>Admin</button><button class="project-option" data-project="Webinar"><i></i>Webinar</button><button class="project-option" data-project="SMM"><i></i>SMM</button><button class="project-option" data-project="Bookkeeping"><i></i>Bookkeeping</button></div>
-      <form class="project-admin-card" id="projectForm"><div><p class="eyebrow">ADMIN PROJECT SETUP</p><h2>Add a project</h2><p>New projects become available as task categories for employees.</p></div><label>Project name<input id="projectName" placeholder="Example: Client Onboarding" required></label><button class="start-btn" type="submit">+ Add project</button></form>
+      <div class="project-admin-card project-employee-search"><div><p class="eyebrow">EMPLOYEE SEARCH</p><h2>Search an employee</h2><p>Filter the project report and assignments by employee name, email, or role.</p></div><label>Employee<input id="projectEmployeeSearch" type="search" placeholder="Search employee name, email, or role"></label><button class="secondary" id="projectEmployeeSearchClear" type="button">Clear search</button></div>
       <div class="project-report-panel">
         <div class="project-report-title"><div><p class="eyebrow">PROJECT HOURS REPORT</p><h2 id="projectReportTitle">All project hours by day</h2><p>Totals are calculated from the project stored on each employee time entry.</p></div></div>
         <div class="report-toolbar report-builder project-report-toolbar"><label class="filter-label">FROM <input id="projectReportStart" type="date"></label><label class="filter-label">TO <input id="projectReportEnd" type="date"></label></div>
@@ -419,6 +419,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260727-project-daily-report-3"></script>
+  <script src="app.js?v=20260727-project-employee-search-4"></script>
 </body>
 </html>
