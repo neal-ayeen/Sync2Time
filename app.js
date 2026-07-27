@@ -156,6 +156,7 @@ const DUAL_PAYROLL_ASSIGNMENTS = [
 let editingPayrollRow = null;
 let editingPayrollAdjustment = null;
 let editingQuickHoursRow = null;
+let pendingReportDayEdit = null;
 let quickBooksStatus = { checked: false, connected: false, message: 'QuickBooks status has not been checked yet.' };
 let quickBooksSyncInProgress = false;
 const QUICKBOOKS_MAPPING_STORAGE_KEY = 'sync2time-quickbooks-payroll-mapping';
@@ -3697,6 +3698,23 @@ function openReportDetail(employeeId, name = '') {
 
 function closeReportDetail() {
   $('#reportDetailBackdrop').hidden = true;
+}
+
+function closeReportDayHoursEditor() {
+  $('#reportDayEditBackdrop').hidden = true;
+  $('#reportDayEditError').hidden = true;
+  pendingReportDayEdit = null;
+}
+
+function ensureReportDayDurationOptions() {
+  const hoursSelect = $('#reportDayEditHours');
+  const minutesSelect = $('#reportDayEditMinutes');
+  if (!hoursSelect.options.length) {
+    hoursSelect.innerHTML = Array.from({ length: 25 }, (_, hour) => `<option value="${hour}">${hour} hour${hour === 1 ? '' : 's'}</option>`).join('');
+  }
+  if (!minutesSelect.options.length) {
+    minutesSelect.innerHTML = Array.from({ length: 60 }, (_, minute) => `<option value="${minute}">${String(minute).padStart(2, '0')} minute${minute === 1 ? '' : 's'}</option>`).join('');
+  }
 }
 
 function initializeReportDates() {
@@ -7305,9 +7323,22 @@ $('#approvalDetailReject').onclick = async () => {
 $('#reportDetailClose').onclick = closeReportDetail;
 $('#reportDetailDone').onclick = closeReportDetail;
 $('#reportDetailBackdrop').onclick = event => { if (event.target === event.currentTarget) closeReportDetail(); };
+$('#reportDayEditForm').onsubmit = submitReportDayHoursEdit;
+$('#reportDayEditClose').onclick = closeReportDayHoursEditor;
+$('#reportDayEditCancel').onclick = closeReportDayHoursEditor;
+$('#reportDayEditBackdrop').onclick = event => { if (event.target === event.currentTarget) closeReportDayHoursEditor(); };
+$('#reportDayEditHours').onchange = event => {
+  const fullDay = Number(event.target.value) === 24;
+  $('#reportDayEditMinutes').disabled = fullDay;
+  if (fullDay) $('#reportDayEditMinutes').value = '0';
+};
 
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
+  if (!$('#reportDayEditBackdrop').hidden) {
+    closeReportDayHoursEditor();
+    return;
+  }
   if (!$('#modalBackdrop').hidden) $('#modalBackdrop').hidden = true;
   if (!$('#employeeModalBackdrop').hidden) closeEmployeeForm();
   if (!$('#employeeDetailBackdrop').hidden) closeEmployeeDetail();
@@ -7715,27 +7746,56 @@ async function editReportDayHours(button) {
   const dateKey = button.dataset.editReportDay;
   const dateLabel = decodeURIComponent(button.dataset.reportDayLabel || dateKey || 'selected day');
   const currentSeconds = Number(button.dataset.reportDaySeconds || 0);
-  const currentHours = Math.max(0, currentSeconds / 3600);
-  const answer = prompt(`Enter the corrected TOTAL payable/worked hours for ${employeeName} on ${dateLabel}.`, currentHours.toFixed(2));
-  if (answer === null) return;
-  const nextHours = Number(String(answer).replace(',', '.'));
-  if (!Number.isFinite(nextHours) || nextHours < 0 || nextHours > 24) {
-    return showToast('Please enter a valid total between 0 and 24 hours.');
+  const roundedMinutes = Math.max(0, Math.min(1440, Math.round(currentSeconds / 60)));
+  ensureReportDayDurationOptions();
+  pendingReportDayEdit = { button, employeeId, employeeName, dateKey, dateLabel, currentSeconds };
+  $('#reportDayEditEmployee').textContent = employeeName;
+  $('#reportDayEditDate').textContent = dateLabel;
+  $('#reportDayEditCurrent').textContent = formatDuration(currentSeconds);
+  $('#reportDayEditHours').value = String(Math.floor(roundedMinutes / 60));
+  $('#reportDayEditMinutes').value = String(roundedMinutes % 60);
+  $('#reportDayEditMinutes').disabled = roundedMinutes === 1440;
+  $('#reportDayEditReason').value = '';
+  $('#reportDayEditError').hidden = true;
+  $('#reportDayEditBackdrop').hidden = false;
+  setTimeout(() => $('#reportDayEditHours').focus(), 0);
+}
+
+async function submitReportDayHoursEdit(event) {
+  event.preventDefault();
+  if (currentAccount?.role !== 'admin' || !pendingReportDayEdit) return;
+  const { button, employeeId, employeeName, dateKey, dateLabel, currentSeconds } = pendingReportDayEdit;
+  const hourPart = Number($('#reportDayEditHours').value);
+  const minutePart = Number($('#reportDayEditMinutes').value);
+  const reason = $('#reportDayEditReason').value.trim();
+  const errorBox = $('#reportDayEditError');
+  if (!Number.isInteger(hourPart) || !Number.isInteger(minutePart) || hourPart < 0 || hourPart > 24 || minutePart < 0 || minutePart > 59 || (hourPart === 24 && minutePart !== 0)) {
+    errorBox.textContent = 'Choose a valid worked time between 0h 00m and 24h 00m.';
+    errorBox.hidden = false;
+    return;
   }
-  const reason = prompt('Reason for this daily hours edit', 'Admin corrected daily hours') || 'Admin corrected daily hours';
-  if (!confirm(`Save ${employeeName}'s ${dateLabel} hours as ${nextHours.toFixed(2)}h? The employee will be notified.`)) return;
+  if (!reason) {
+    errorBox.textContent = 'Please enter a reason so the employee can understand the change.';
+    errorBox.hidden = false;
+    return;
+  }
+  const nextSeconds = (hourPart * 60 + minutePart) * 60;
+  errorBox.hidden = true;
+  const saveButton = $('#reportDayEditSave');
+  saveButton.disabled = true;
+  saveButton.textContent = 'Saving…';
   button.disabled = true;
   const entries = reportDayTimeEntries(employeeId, dateKey);
   let deletedIds = [];
   let correctedTimeEntryId = '';
-  if (usesSupabase() && nextHours > 0) {
+  if (usesSupabase() && nextSeconds > 0) {
     const firstEntry = entries[0];
     const firstActivity = parseLiveActivity(firstEntry?.task || '');
     const start = firstEntry?.clock_in ? new Date(firstEntry.clock_in) : businessStartFromKey(dateKey);
-    const end = new Date(start.getTime() + nextHours * 60 * 60 * 1000);
+    const end = new Date(start.getTime() + nextSeconds * 1000);
     const correctedPayload = {
       employee_id: employeeId,
-      task: serializeLiveActivity(firstActivity.task || 'Admin corrected hours', `${reason} · corrected from ${formatDuration(currentSeconds)} to ${formatDuration(nextHours * 3600)}`),
+      task: serializeLiveActivity(firstActivity.task || 'Admin corrected hours', `${reason} · corrected from ${formatDuration(currentSeconds)} to ${formatDuration(nextSeconds)}`),
       clock_in: start.toISOString(),
       clock_out: end.toISOString(),
       status: 'completed'
@@ -7744,12 +7804,16 @@ async function editReportDayHours(button) {
       const { error } = await supabaseClient.from('time_entries').update(correctedPayload).eq('id', firstEntry.id).eq('employee_id', employeeId);
       if (error) {
         button.disabled = false;
+        saveButton.disabled = false;
+        saveButton.textContent = 'Save corrected hours';
         return showToast(`Corrected time update error: ${error.message}`);
       }
       correctedTimeEntryId = firstEntry.id;
       const extraDelete = await markTimeEntryIdsDeleted(employeeId, entries.slice(1).map(entry => entry.id));
       if (!extraDelete.ok) {
         button.disabled = false;
+        saveButton.disabled = false;
+        saveButton.textContent = 'Save corrected hours';
         return showToast(`Extra entry cleanup error: ${extraDelete.error}`);
       }
       deletedIds = extraDelete.deletedIds;
@@ -7757,6 +7821,8 @@ async function editReportDayHours(button) {
       const { data, error } = await supabaseClient.from('time_entries').insert(correctedPayload).select('id').maybeSingle();
       if (error) {
         button.disabled = false;
+        saveButton.disabled = false;
+        saveButton.textContent = 'Save corrected hours';
         return showToast(`Corrected time insert error: ${error.message}`);
       }
       correctedTimeEntryId = data?.id || '';
@@ -7768,6 +7834,8 @@ async function editReportDayHours(button) {
     const deletion = await markReportDayEntriesDeleted(employeeId, dateKey);
     if (!deletion.ok) {
       button.disabled = false;
+      saveButton.disabled = false;
+      saveButton.textContent = 'Save corrected hours';
       return showToast(`Edit day error: ${deletion.error}`);
     }
     deletedIds = deletion.deletedIds;
@@ -7777,10 +7845,13 @@ async function editReportDayHours(button) {
     employeeName,
     type: 'admin_day_edit',
     title: 'Daily hours edited by admin',
-    message: `${employeeName}'s ${dateLabel} hours were edited by HR Admin from ${formatDuration(currentSeconds)} to ${formatDuration(nextHours * 3600)}.${reason ? ' Reason: ' + reason : ''}`,
-    meta: { dateKey, dateLabel, previousSeconds: currentSeconds, newSeconds: nextHours * 3600, reason, correctedTimeEntryId, replacedTimeEntryIds: deletedIds }
+    message: `${employeeName}'s ${dateLabel} hours were edited by HR Admin from ${formatDuration(currentSeconds)} to ${formatDuration(nextSeconds)}. Reason: ${reason}`,
+    meta: { dateKey, dateLabel, previousSeconds: currentSeconds, newSeconds: nextSeconds, reason, correctedTimeEntryId, replacedTimeEntryIds: deletedIds }
   });
+  closeReportDayHoursEditor();
   await refreshAfterReportDayTimeChange(employeeId, employeeName);
+  saveButton.disabled = false;
+  saveButton.textContent = 'Save corrected hours';
   showToast(`${employeeName}'s ${dateLabel} hours were updated.`);
 }
 

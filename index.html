@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260727-report-day-edit-delete-1" />
+  <link rel="stylesheet" href="styles.css?v=20260727-report-hours-minutes-2" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -335,6 +335,23 @@
   <div class="modal-backdrop" id="reportDetailBackdrop" hidden>
     <section class="modal report-detail-modal" aria-labelledby="reportDetailTitle"><button type="button" class="modal-close" id="reportDetailClose" aria-label="Close hours summary">×</button><p class="eyebrow">HOURS SUMMARY</p><h2 id="reportDetailTitle">Employee hours</h2><p class="adjustment-period" id="reportDetailPeriod">Selected period</p><div class="report-metrics detail-report-metrics"><article><span>TOTAL HOURS</span><b id="reportDetailTotalHours">0h 00m</b><small>Within the selected range</small></article><article><span>ENTRIES</span><b id="reportDetailEntryCount">0</b><small>Clock records</small></article><article><span>WORK DAYS</span><b id="reportDetailDayCount">0</b><small>Days with logged time</small></article></div><div class="attendance-card"><div class="report-table-head employee-hours-head report-detail-head"><span>DATE</span><span>ENTRIES</span><span>WORKED</span><span>DETAILS</span><span>ACTION</span></div><div id="reportDetailRows"></div></div><div class="modal-actions"><button class="secondary" id="reportDetailDone" type="button">Close</button></div></section>
   </div>
+  <div class="modal-backdrop" id="reportDayEditBackdrop" hidden>
+    <form class="modal report-day-edit-modal" id="reportDayEditForm">
+      <button type="button" class="modal-close" id="reportDayEditClose" aria-label="Close daily hours editor">×</button>
+      <p class="eyebrow">EDIT DAILY HOURS</p>
+      <h2 id="reportDayEditEmployee">Employee</h2>
+      <p class="adjustment-period" id="reportDayEditDate">Selected day</p>
+      <div class="report-day-current"><span>CURRENT WORKED TIME</span><b id="reportDayEditCurrent">0h 00m</b></div>
+      <p class="report-day-edit-help">Enter the corrected total using hours and minutes. No decimal calculation is needed.</p>
+      <div class="time-inputs">
+        <label>Hours<select id="reportDayEditHours" required></select></label>
+        <label>Minutes<select id="reportDayEditMinutes" required></select></label>
+      </div>
+      <label>Reason / notes<input id="reportDayEditReason" required maxlength="250" placeholder="Why are these hours being changed?"></label>
+      <p class="login-error" id="reportDayEditError" hidden></p>
+      <div class="modal-actions"><button class="secondary" id="reportDayEditCancel" type="button">Cancel</button><button class="start-btn" id="reportDayEditSave" type="submit">Save corrected hours</button></div>
+    </form>
+  </div>
   <div class="toast" id="toast"></div>
   <div class="modal-backdrop" id="longSessionBackdrop" hidden>
     <section class="modal long-session-modal" role="alertdialog" aria-modal="true" aria-labelledby="longSessionTitle">
@@ -395,6 +412,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260727-report-day-edit-delete-1"></script>
+  <script src="app.js?v=20260727-report-hours-minutes-2"></script>
 </body>
 </html>
