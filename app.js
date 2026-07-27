@@ -2246,10 +2246,10 @@ async function loadSupabaseNotifications() {
     .from('app_notifications')
     .select('id, employee_id, type, title, message, meta, created_at, read_at')
     .eq('employee_id', currentProfile.id)
-    .eq('type', 'deleted_time')
+    .in('type', ['deleted_time', 'admin_day_edit', 'admin_day_delete', 'dry_run_cleanup', 'admin_clock_out'])
     .order('created_at', { ascending: false });
   if (error) {
-    console.error('Deleted-time notification load failed:', error.message);
+    console.error('Time adjustment notification load failed:', error.message);
     return false;
   }
   deletedTimeAlerts = (data || []).map(row => ({
@@ -3475,7 +3475,7 @@ function renderDocuments() {
 function renderDeletedTimeAlerts() {
   if (!$('#deletedTimeRows')) return;
   const ownAlerts = deletedTimeAlerts.filter(alert => !currentProfile?.id || alert.employeeId === currentProfile.id || alert.employeeEmail === currentAccount?.email);
-  $('#deletedTimeRows').innerHTML = ownAlerts.map(alert => `<div class="deleted-notice"><b>${escapeHtml(alert.title || 'Time entry deleted')}</b><small>${escapeHtml(alert.message || '')}</small><small>${businessDateTimeLabel(alert.createdAt || Date.now())}</small></div>`).join('') || '<div class="empty-state">No deleted time notices.</div>';
+  $('#deletedTimeRows').innerHTML = ownAlerts.map(alert => `<div class="deleted-notice"><b>${escapeHtml(alert.title || 'Time adjustment')}</b><small>${escapeHtml(alert.message || '')}</small><small>${businessDateTimeLabel(alert.createdAt || Date.now())}</small></div>`).join('') || '<div class="empty-state">No time adjustment notices.</div>';
 }
 
 function payrollAdjustmentHistoryFor(employeeId) {
@@ -3691,7 +3691,7 @@ function openReportDetail(employeeId, name = '') {
   $('#reportDetailTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
   $('#reportDetailEntryCount').textContent = rows.reduce((sum, row) => sum + row.entries, 0);
   $('#reportDetailDayCount').textContent = rows.length;
-  $('#reportDetailRows').innerHTML = rows.map(row => `<div class="report-row employee-hours-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span>${escapeHtml([...new Set(row.tasks)].join(', '))}</span></div>`).join('') || '<div class="empty-state">No hours found for this employee in the selected period.</div>';
+  $('#reportDetailRows').innerHTML = rows.map(row => `<div class="report-row employee-hours-row report-detail-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span>${escapeHtml([...new Set(row.tasks)].join(', '))}</span><span class="report-day-actions"><button class="edit-adjustment-btn" type="button" data-edit-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}">Edit day</button><button class="clear-time-btn" type="button" data-delete-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}">Delete day</button></span></div>`).join('') || '<div class="empty-state">No hours found for this employee in the selected period.</div>';
   $('#reportDetailBackdrop').hidden = false;
 }
 
@@ -3738,11 +3738,13 @@ function buildDailyHoursSummary(employeeId, start, end) {
       dateLabel: record.date,
       entries: 0,
       seconds: 0,
-      tasks: []
+      tasks: [],
+      entryIds: []
     };
     existing.entries += 1;
     existing.seconds += durationSecondsFromLabel(record.worked);
     existing.tasks.push(record.task || 'Tracked time');
+    if (record.id) existing.entryIds.push(record.id);
     groups.set(record.dateKey, existing);
   });
   return [...groups.values()].sort((left, right) => left.dateKey.localeCompare(right.dateKey));
@@ -7615,6 +7617,200 @@ async function createDeletedTimeNotice({ employeeId, employeeName, timeLabel, re
   return true;
 }
 
+async function createAdminDayAdjustmentNotice({ employeeId, employeeName, type, title, message, meta = {} }) {
+  const notice = {
+    id: crypto.randomUUID(),
+    employeeId,
+    employeeName,
+    title,
+    message,
+    meta,
+    createdAt: new Date().toISOString()
+  };
+  if (usesSupabase()) {
+    const { error } = await supabaseClient.from('app_notifications').insert({
+      employee_id: employeeId,
+      type,
+      title,
+      message,
+      meta: { ...meta, adjustedBy: currentProfile?.id || null }
+    });
+    if (error) {
+      showToast(`Time changed, but employee notice failed: ${error.message}`);
+      console.error('Admin day adjustment notification failed:', error.message);
+      return false;
+    }
+  } else {
+    deletedTimeAlerts.unshift(notice);
+    persistDeletedTimeAlerts();
+  }
+  return true;
+}
+
+function reportDayTimeEntries(employeeId, dateKey) {
+  return supabaseTimeEntries
+    .filter(entry => entry.employee_id === employeeId && entry.clock_in && isoDate(new Date(entry.clock_in)) === dateKey)
+    .sort((left, right) => new Date(left.clock_in) - new Date(right.clock_in));
+}
+
+async function markTimeEntryIdsDeleted(employeeId, ids = []) {
+  const safeIds = ids.filter(Boolean);
+  if (!safeIds.length) return { ok: true, deletedIds: [] };
+  if (usesSupabase()) {
+    const update = await supabaseClient
+      .from('time_entries')
+      .update({ status: 'deleted' })
+      .eq('employee_id', employeeId)
+      .in('id', safeIds);
+    if (update.error) {
+      const hardDelete = await supabaseClient
+        .from('time_entries')
+        .delete()
+        .eq('employee_id', employeeId)
+        .in('id', safeIds);
+      if (hardDelete.error) return { ok: false, error: hardDelete.error.message, deletedIds: [] };
+    }
+  } else {
+    supabaseTimeEntries = supabaseTimeEntries.filter(entry => !safeIds.includes(entry.id));
+  }
+  return { ok: true, deletedIds: safeIds };
+}
+
+async function markReportDayEntriesDeleted(employeeId, dateKey) {
+  const entries = reportDayTimeEntries(employeeId, dateKey);
+  const ids = entries.map(entry => entry.id).filter(Boolean);
+  if (!ids.length) return { ok: true, entries, deletedIds: [] };
+  const deleted = await markTimeEntryIdsDeleted(employeeId, ids);
+  if (!deleted.ok) return { ok: false, error: deleted.error, entries, deletedIds: [] };
+  if (usesSupabase()) {
+    if (entries.some(entry => entry.status === 'working' || !entry.clock_out)) {
+      await supabaseClient.from('live_presence').delete().eq('employee_id', employeeId);
+    }
+  }
+  return { ok: true, entries, deletedIds: deleted.deletedIds };
+}
+
+async function refreshAfterReportDayTimeChange(employeeId, employeeName) {
+  if (usesSupabase()) {
+    await loadSupabaseTimeEntries();
+    await loadSupabaseLivePresence();
+    await loadPayrollAdjustments();
+    await loadPayrollAdjustmentEvents();
+  }
+  renderAttendance();
+  renderReports();
+  renderPayroll();
+  renderAdjustmentCenter();
+  renderLiveTeam();
+  renderScheduleWatch();
+  renderAuditLog();
+  renderDeletedTimeAlerts();
+  openReportDetail(employeeId, employeeName);
+}
+
+async function editReportDayHours(button) {
+  if (currentAccount?.role !== 'admin') return;
+  const employeeId = button.dataset.reportDayEmployee;
+  const employeeName = decodeURIComponent(button.dataset.reportDayName || 'Employee');
+  const dateKey = button.dataset.editReportDay;
+  const dateLabel = decodeURIComponent(button.dataset.reportDayLabel || dateKey || 'selected day');
+  const currentSeconds = Number(button.dataset.reportDaySeconds || 0);
+  const currentHours = Math.max(0, currentSeconds / 3600);
+  const answer = prompt(`Enter the corrected TOTAL payable/worked hours for ${employeeName} on ${dateLabel}.`, currentHours.toFixed(2));
+  if (answer === null) return;
+  const nextHours = Number(String(answer).replace(',', '.'));
+  if (!Number.isFinite(nextHours) || nextHours < 0 || nextHours > 24) {
+    return showToast('Please enter a valid total between 0 and 24 hours.');
+  }
+  const reason = prompt('Reason for this daily hours edit', 'Admin corrected daily hours') || 'Admin corrected daily hours';
+  if (!confirm(`Save ${employeeName}'s ${dateLabel} hours as ${nextHours.toFixed(2)}h? The employee will be notified.`)) return;
+  button.disabled = true;
+  const entries = reportDayTimeEntries(employeeId, dateKey);
+  let deletedIds = [];
+  let correctedTimeEntryId = '';
+  if (usesSupabase() && nextHours > 0) {
+    const firstEntry = entries[0];
+    const firstActivity = parseLiveActivity(firstEntry?.task || '');
+    const start = firstEntry?.clock_in ? new Date(firstEntry.clock_in) : businessStartFromKey(dateKey);
+    const end = new Date(start.getTime() + nextHours * 60 * 60 * 1000);
+    const correctedPayload = {
+      employee_id: employeeId,
+      task: serializeLiveActivity(firstActivity.task || 'Admin corrected hours', `${reason} · corrected from ${formatDuration(currentSeconds)} to ${formatDuration(nextHours * 3600)}`),
+      clock_in: start.toISOString(),
+      clock_out: end.toISOString(),
+      status: 'completed'
+    };
+    if (firstEntry?.id) {
+      const { error } = await supabaseClient.from('time_entries').update(correctedPayload).eq('id', firstEntry.id).eq('employee_id', employeeId);
+      if (error) {
+        button.disabled = false;
+        return showToast(`Corrected time update error: ${error.message}`);
+      }
+      correctedTimeEntryId = firstEntry.id;
+      const extraDelete = await markTimeEntryIdsDeleted(employeeId, entries.slice(1).map(entry => entry.id));
+      if (!extraDelete.ok) {
+        button.disabled = false;
+        return showToast(`Extra entry cleanup error: ${extraDelete.error}`);
+      }
+      deletedIds = extraDelete.deletedIds;
+    } else {
+      const { data, error } = await supabaseClient.from('time_entries').insert(correctedPayload).select('id').maybeSingle();
+      if (error) {
+        button.disabled = false;
+        return showToast(`Corrected time insert error: ${error.message}`);
+      }
+      correctedTimeEntryId = data?.id || '';
+    }
+    if (entries.some(entry => entry.status === 'working' || !entry.clock_out)) {
+      await supabaseClient.from('live_presence').delete().eq('employee_id', employeeId);
+    }
+  } else {
+    const deletion = await markReportDayEntriesDeleted(employeeId, dateKey);
+    if (!deletion.ok) {
+      button.disabled = false;
+      return showToast(`Edit day error: ${deletion.error}`);
+    }
+    deletedIds = deletion.deletedIds;
+  }
+  await createAdminDayAdjustmentNotice({
+    employeeId,
+    employeeName,
+    type: 'admin_day_edit',
+    title: 'Daily hours edited by admin',
+    message: `${employeeName}'s ${dateLabel} hours were edited by HR Admin from ${formatDuration(currentSeconds)} to ${formatDuration(nextHours * 3600)}.${reason ? ' Reason: ' + reason : ''}`,
+    meta: { dateKey, dateLabel, previousSeconds: currentSeconds, newSeconds: nextHours * 3600, reason, correctedTimeEntryId, replacedTimeEntryIds: deletedIds }
+  });
+  await refreshAfterReportDayTimeChange(employeeId, employeeName);
+  showToast(`${employeeName}'s ${dateLabel} hours were updated.`);
+}
+
+async function deleteReportDayHours(button) {
+  if (currentAccount?.role !== 'admin') return;
+  const employeeId = button.dataset.reportDayEmployee;
+  const employeeName = decodeURIComponent(button.dataset.reportDayName || 'Employee');
+  const dateKey = button.dataset.deleteReportDay;
+  const dateLabel = decodeURIComponent(button.dataset.reportDayLabel || dateKey || 'selected day');
+  const currentSeconds = Number(button.dataset.reportDaySeconds || 0);
+  if (!confirm(`Delete all logged time for ${employeeName} on ${dateLabel}? The employee will be notified.`)) return;
+  const reason = prompt('Reason for deleting this day', 'Admin removed incorrect daily hours') || 'Admin removed incorrect daily hours';
+  button.disabled = true;
+  const deletion = await markReportDayEntriesDeleted(employeeId, dateKey);
+  if (!deletion.ok) {
+    button.disabled = false;
+    return showToast(`Delete day error: ${deletion.error}`);
+  }
+  await createAdminDayAdjustmentNotice({
+    employeeId,
+    employeeName,
+    type: 'admin_day_delete',
+    title: 'Daily hours deleted by admin',
+    message: `${employeeName}'s ${dateLabel} logged time (${formatDuration(currentSeconds)}) was deleted by HR Admin.${reason ? ' Reason: ' + reason : ''}`,
+    meta: { dateKey, dateLabel, previousSeconds: currentSeconds, reason, deletedTimeEntryIds: deletion.deletedIds }
+  });
+  await refreshAfterReportDayTimeChange(employeeId, employeeName);
+  showToast(`${employeeName}'s ${dateLabel} hours were deleted.`);
+}
+
 async function deleteEmployeeTimeEntry(button) {
   if (currentAccount?.role !== 'admin') return;
   const id = button.dataset.deleteTime;
@@ -7942,6 +8138,18 @@ document.body.addEventListener('click', async event => {
   if (saveAdjustmentRow) {
     event.stopPropagation();
     await saveAdjustmentCenterRow(saveAdjustmentRow.dataset.saveAdjustmentRow);
+    return;
+  }
+  const editReportDay = event.target.closest('[data-edit-report-day]');
+  if (editReportDay) {
+    event.stopPropagation();
+    await editReportDayHours(editReportDay);
+    return;
+  }
+  const deleteReportDay = event.target.closest('[data-delete-report-day]');
+  if (deleteReportDay) {
+    event.stopPropagation();
+    await deleteReportDayHours(deleteReportDay);
     return;
   }
   const deleteTime = event.target.closest('[data-delete-time]');
