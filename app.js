@@ -3874,11 +3874,15 @@ function openReportDetail(employeeId, name = '') {
   $('#reportDetailPeriod').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${projectFilter === 'All' ? 'All projects' : projectFilter}`;
   $('#reportDetailTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
   $('#reportDetailEntryCount').textContent = rows.reduce((sum, row) => sum + row.entries, 0);
-  $('#reportDetailDayCount').textContent = rows.length;
+  $('#reportDetailDayCount').textContent = new Set(rows.map(row => row.dateKey)).size;
   $('#reportDetailRows').innerHTML = rows.map(row => {
-    const encodedProject = encodeURIComponent(projectFilter);
+    const encodedProject = encodeURIComponent(row.project);
+    const details = [...new Set([
+      ...row.tasks.filter(task => nameKey(task) !== nameKey(row.project)),
+      ...row.notes
+    ].filter(Boolean))].join(' · ');
     const actions = `<span class="report-day-actions"><button class="edit-adjustment-btn" type="button" data-edit-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}" data-report-day-project="${encodedProject}">Edit day</button><button class="clear-time-btn" type="button" data-delete-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}" data-report-day-project="${encodedProject}">Delete day</button></span>`;
-    return `<div class="report-row employee-hours-row report-detail-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span>${escapeHtml([...new Set(row.tasks)].join(', '))}</span>${actions}</div>`;
+    return `<div class="report-row employee-hours-row report-detail-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span class="report-project-detail"><b>${escapeHtml(row.project)}</b><small>${escapeHtml(details || 'Tracked time')}</small></span>${actions}</div>`;
   }).join('') || '<div class="empty-state">No hours found for this employee in the selected period.</div>';
   $('#reportDetailBackdrop').hidden = false;
 }
@@ -3945,21 +3949,28 @@ function buildDailyHoursSummary(employeeId, start, end, projectFilter = 'All') {
   });
   const groups = new Map();
   records.forEach(record => {
-    const existing = groups.get(record.dateKey) || {
+    const project = record.project || 'Uncategorized';
+    const groupKey = `${record.dateKey}::${nameKey(project)}`;
+    const existing = groups.get(groupKey) || {
       dateKey: record.dateKey,
       dateLabel: record.date,
+      project,
       entries: 0,
       seconds: 0,
       tasks: [],
+      notes: [],
       entryIds: []
     };
     existing.entries += 1;
     existing.seconds += durationSecondsFromLabel(record.worked);
     existing.tasks.push(record.task || 'Tracked time');
+    if (record.note) existing.notes.push(record.note);
     if (record.id) existing.entryIds.push(record.id);
-    groups.set(record.dateKey, existing);
+    groups.set(groupKey, existing);
   });
-  return [...groups.values()].sort((left, right) => left.dateKey.localeCompare(right.dateKey));
+  return [...groups.values()].sort((left, right) =>
+    left.dateKey.localeCompare(right.dateKey) || left.project.localeCompare(right.project)
+  );
 }
 
 function renderEmployeeHoursReport() {
@@ -3968,9 +3979,12 @@ function renderEmployeeHoursReport() {
   const rows = buildDailyHoursSummary(currentProfile.id, start, end);
   currentEmployeeReportRows = rows;
   $('#employeeReportTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
-  $('#employeeReportDayCount').textContent = rows.length;
+  $('#employeeReportDayCount').textContent = new Set(rows.map(row => row.dateKey)).size;
   $('#employeeReportEntryCount').textContent = rows.reduce((sum, row) => sum + row.entries, 0);
-  $('#employeeReportRows').innerHTML = rows.map(row => `<div class="report-row employee-hours-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span>${escapeHtml([...new Set(row.tasks)].join(', '))}</span></div>`).join('') || '<div class="empty-state">No hours found for this period.</div>';
+  $('#employeeReportRows').innerHTML = rows.map(row => {
+    const details = [...new Set([...row.tasks.filter(task => nameKey(task) !== nameKey(row.project)), ...row.notes].filter(Boolean))].join(' · ');
+    return `<div class="report-row employee-hours-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span><b>${escapeHtml(row.project)}</b>${details ? `<small>${escapeHtml(details)}</small>` : ''}</span></div>`;
+  }).join('') || '<div class="empty-state">No hours found for this period.</div>';
   $('#employeeReportRangeLabel').textContent = `Showing ${businessDateLabel(start)} to ${businessDateLabel(end)}`;
 }
 
