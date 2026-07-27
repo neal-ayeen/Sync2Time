@@ -201,6 +201,7 @@ const WIDE_TABLE_SCROLL_SELECTORS = [
   '.adjustment-center-scroll',
   '.attendance-card',
   '.project-list-card',
+  '.project-report-card',
   '.team-list-card',
   '.ai-alert-card',
   '.audit-card',
@@ -2115,9 +2116,10 @@ async function applyApprovedTimeEdit(request, silent = false) {
     savedEntryId = result.data?.id || null;
   }
   if (!savedEntryId) {
+    const requestProject = projectNameForTrackedTask(cleanTimeEditReason(request.reason));
     result = await supabaseClient.from('time_entries').insert({
       employee_id: request.employeeId,
-      task: addAsSeparateEntry ? `Approved added time${cleanTimeEditReason(request.reason) ? ` - ${cleanTimeEditReason(request.reason)}` : ''}` : 'Approved time correction',
+      task: requestProject || (addAsSeparateEntry ? `Approved added time${cleanTimeEditReason(request.reason) ? ` - ${cleanTimeEditReason(request.reason)}` : ''}` : 'Approved time correction'),
       clock_in: start.toISOString(),
       clock_out: end.toISOString(),
       status: 'completed'
@@ -2319,6 +2321,7 @@ async function refreshSupabaseData() {
   renderEmployeeRequests();
   renderDocuments();
   renderDeletedTimeAlerts();
+  renderProjects();
   renderReports();
   renderPayroll();
   renderAdjustmentCenter();
@@ -2377,6 +2380,7 @@ function subscribeSupabaseRealtime() {
       renderAttendance();
       renderScheduleWatch();
       renderTeamDirectory();
+      renderProjects();
       renderReports();
       renderAdjustmentCenter();
       renderAiAlerts();
@@ -3096,6 +3100,118 @@ function projectFor(person, index) {
   return ['Coaching', 'Meeting', 'On Class'][index % 3];
 }
 
+function projectNameForTrackedTask(task = '') {
+  const trackedTask = parseLiveActivity(task).task || '';
+  const taskKey = nameKey(trackedTask);
+  if (!taskKey) return '';
+  const exact = taskOptions.find(project => nameKey(project) === taskKey);
+  if (exact) return exact;
+  const contained = taskOptions
+    .filter(project => nameKey(project))
+    .sort((left, right) => nameKey(right).length - nameKey(left).length)
+    .find(project => taskKey.includes(nameKey(project)));
+  return contained || '';
+}
+
+function projectNameForTimeEntry(entry = {}) {
+  const activity = parseLiveActivity(entry.task || '');
+  const directProject = projectNameForTrackedTask(activity.task) || projectNameForTrackedTask(activity.note);
+  if (directProject) return directProject;
+  const dateKey = entry.clock_in ? businessDateKey(entry.clock_in) : '';
+  const matchingRequest = timeEditRequests.find(request =>
+    request.status === 'approved' &&
+    request.employeeId === entry.employee_id &&
+    request.date === dateKey &&
+    projectNameForTrackedTask(cleanTimeEditReason(request.reason))
+  );
+  return matchingRequest ? projectNameForTrackedTask(cleanTimeEditReason(matchingRequest.reason)) : '';
+}
+
+function initializeProjectReportDates() {
+  if (!$('#projectReportStart') || !$('#projectReportEnd')) return;
+  const { startKey, endKey } = currentCutoffKeys(new Date(), false);
+  if (!$('#projectReportStart').value) $('#projectReportStart').value = startKey;
+  if (!$('#projectReportEnd').value) $('#projectReportEnd').value = endKey;
+}
+
+function projectReportRange() {
+  initializeProjectReportDates();
+  let startKey = $('#projectReportStart').value;
+  let endKey = $('#projectReportEnd').value;
+  if (startKey > endKey) [startKey, endKey] = [endKey, startKey];
+  return { startKey, endKey };
+}
+
+function buildProjectReportRows() {
+  const { startKey, endKey } = projectReportRange();
+  const groups = new Map();
+  (usesSupabase() ? supabaseTimeEntries : []).forEach((entry, index) => {
+    if (!entry?.clock_in || entry.status === 'deleted') return;
+    const dateKey = businessDateKey(entry.clock_in);
+    if (dateKey < startKey || dateKey > endKey) return;
+    const activity = parseLiveActivity(entry.task || '');
+    const project = projectNameForTimeEntry(entry);
+    if (!project || (selectedProject !== 'All' && nameKey(project) !== nameKey(selectedProject))) return;
+    const person = attendanceRecordFromSupabase(entry, index);
+    const employeeId = entry.employee_id || person.employeeId || person.email;
+    const key = `${dateKey}|${employeeId}|${nameKey(project)}`;
+    const existing = groups.get(key) || {
+      dateKey,
+      dateLabel: businessDateLabel(entry.clock_in, { month: 'short', day: 'numeric', year: 'numeric' }),
+      employeeId,
+      employeeName: person.name,
+      employeeRole: person.role,
+      initials: person.initials,
+      color: person.color,
+      project,
+      entries: 0,
+      seconds: 0,
+      tasks: new Set(),
+      notes: new Set()
+    };
+    existing.entries += 1;
+    existing.seconds += secondsBetween(entry.clock_in, entry.clock_out || Date.now());
+    if (activity.task) existing.tasks.add(activity.task);
+    if (activity.note) existing.notes.add(activity.note);
+    groups.set(key, existing);
+  });
+  return [...groups.values()].sort((left, right) =>
+    left.dateKey.localeCompare(right.dateKey) ||
+    left.employeeName.localeCompare(right.employeeName) ||
+    left.project.localeCompare(right.project)
+  );
+}
+
+function renderProjectReport() {
+  if (!$('#projectReportRows')) return;
+  const rows = buildProjectReportRows();
+  const { startKey, endKey } = projectReportRange();
+  const projectLabel = selectedProject === 'All' ? 'All project' : selectedProject;
+  $('#projectReportTitle').textContent = `${projectLabel} hours by day`;
+  $('#projectReportTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
+  $('#projectReportEmployeeCount').textContent = new Set(rows.map(row => row.employeeId)).size;
+  $('#projectReportDayCount').textContent = new Set(rows.map(row => row.dateKey)).size;
+  $('#projectReportEntryCount').textContent = rows.reduce((sum, row) => sum + row.entries, 0);
+  $('#projectReportRows').innerHTML = rows.map(row => {
+    const details = [...row.tasks].join(', ');
+    const notes = [...row.notes].join(' · ');
+    return `<div class="project-report-row"><span class="project-report-date">${escapeHtml(row.dateLabel)}</span><div class="person"><span class="person-avatar" style="background:${row.color}">${escapeHtml(row.initials)}</span><span>${escapeHtml(row.employeeName)}<small>${escapeHtml(row.employeeRole)}</small></span></div><span class="project-tag">${escapeHtml(row.project)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span class="project-report-details">${escapeHtml(details || row.project)}${notes ? `<small>${escapeHtml(notes)}</small>` : ''}</span></div>`;
+  }).join('') || `<div class="empty-state">No ${selectedProject === 'All' ? 'project' : escapeHtml(selectedProject)} time was recorded within these dates.</div>`;
+  $('#projectReportRange').textContent = `${projectLabel} · ${businessDateLabel(businessStartFromKey(startKey))} to ${businessDateLabel(businessEndFromKey(endKey))}`;
+}
+
+function employeesWhoUsedProject(project) {
+  if (!project || project === 'All') return new Set();
+  const { startKey, endKey } = projectReportRange();
+  return new Set(supabaseTimeEntries.filter(entry => {
+    if (!entry?.clock_in || entry.status === 'deleted') return false;
+    const dateKey = businessDateKey(entry.clock_in);
+    return dateKey >= startKey &&
+      dateKey <= endKey &&
+      nameKey(projectNameForTimeEntry(entry)) === nameKey(project);
+  }).map(entry => entry.employee_id));
+}
+
 function renderProjectOptions() {
   $('#projectOptions').innerHTML = [`<button class="project-option ${selectedProject === 'All' ? 'active' : ''}" data-project="All"><i></i>All work</button>`, ...taskOptions.map(project => `<button class="project-option ${selectedProject === project ? 'active' : ''}" data-project="${escapeHtml(project)}"><i></i>${escapeHtml(project)}</button>`)].join('');
   const select = $('#employeeProject');
@@ -3110,7 +3226,13 @@ function renderProjectOptions() {
 
 function renderProjects() {
   renderProjectOptions();
-  const rows = rosterSource().map((person, index) => ({ person, project: projectFor(person, index) })).filter(item => selectedProject === 'All' || item.project === selectedProject);
+  renderProjectReport();
+  const usedByEmployee = employeesWhoUsedProject(selectedProject);
+  const rows = rosterSource().map((person, index) => {
+    const assignedProject = projectFor(person, index);
+    const usedSelectedProject = selectedProject !== 'All' && usedByEmployee.has(realEmployeeId(person));
+    return { person, project: usedSelectedProject ? selectedProject : assignedProject, usedSelectedProject };
+  }).filter(item => selectedProject === 'All' || nameKey(item.project) === nameKey(selectedProject) || item.usedSelectedProject);
   $('#projectRows').innerHTML = rows.map(({ person, project }) => `<div class="project-row" role="button" tabindex="0" data-employee="${encodeURIComponent(person.name)}"><div class="person"><span class="person-avatar" style="background:${person.color}">${person.initials}</span><span>${person.name}<small>${person.role}</small></span></div><span class="project-tag">${project}</span><span>${person.task}</span><span class="schedule-shift">${person.schedule}</span><span class="status ${person.status === 'clocked' ? 'active' : 'complete'}">${person.status === 'clocked' ? '● Working' : 'Complete'}</span></div>`).join('') || '<div class="empty-state">No employees in this project category.</div>';
   $('#projectCount').textContent = `${rows.length} assignment${rows.length === 1 ? '' : 's'}`;
 }
@@ -7922,6 +8044,8 @@ $('#projectOptions').onclick = event => {
   selectedProject = button.dataset.project;
   renderProjects();
 };
+$('#projectReportStart').onchange = renderProjects;
+$('#projectReportEnd').onchange = renderProjects;
 
 $('#projectForm').onsubmit = async event => {
   event.preventDefault();
@@ -8242,6 +8366,7 @@ document.body.addEventListener('click', async event => {
 (async function init() {
   if (!supabaseClient) await seedRosterAccess(false);
   initializeReportDates();
+  initializeProjectReportDates();
   subscribeSupabaseRealtime();
   renderManagedEmployees();
   renderProjectOptions();
