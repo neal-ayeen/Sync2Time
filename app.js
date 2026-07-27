@@ -308,7 +308,12 @@ function taskMatchesProject(task = '', project = '') {
 }
 
 function entryMatchesDualAssignment(entry = {}, assignment) {
-  return taskMatchesProject(parseLiveActivity(entry.task || '').task || '', assignment.project);
+  if (!assignment) return false;
+  const recoveredProject = projectNameForTimeEntry(entry);
+  if (recoveredProject) return nameKey(recoveredProject) === nameKey(assignment.project);
+  const activity = parseLiveActivity(entry.task || '');
+  return taskMatchesProject(activity.task || '', assignment.project) ||
+    taskMatchesProject(activity.note || '', assignment.project);
 }
 
 function currentEmployeeTaskValue() {
