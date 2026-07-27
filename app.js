@@ -3225,8 +3225,44 @@ function employeesWhoUsedProject(project) {
   }).map(entry => entry.employee_id));
 }
 
+function reportProjectFilter() {
+  return $('#reportProject')?.value || 'All';
+}
+
+function renderReportProjectOptions() {
+  const select = $('#reportProject');
+  if (!select) return;
+  const selected = select.value || 'All';
+  const availableProjects = [...new Set([...taskOptions, 'Uncategorized'])];
+  select.innerHTML = '<option value="All">All projects</option>' +
+    availableProjects.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
+  select.value = availableProjects.some(project => nameKey(project) === nameKey(selected)) ? availableProjects.find(project => nameKey(project) === nameKey(selected)) : 'All';
+}
+
+function renderReportProjectTotals(records = []) {
+  const container = $('#reportProjectTotals');
+  if (!container) return;
+  const totals = new Map([...new Set([...taskOptions, 'Uncategorized'])].map(project => [project, 0]));
+  records.forEach(record => {
+    const configuredProject = taskOptions.find(project => nameKey(project) === nameKey(record.project));
+    const project = configuredProject || record.project || 'Uncategorized';
+    totals.set(project, (totals.get(project) || 0) + durationSecondsFromLabel(record.worked));
+  });
+  const allSeconds = records.reduce((sum, record) => sum + durationSecondsFromLabel(record.worked), 0);
+  const selected = reportProjectFilter();
+  const items = [
+    { value: 'All', label: 'All projects', seconds: allSeconds },
+    ...[...totals.entries()].map(([label, seconds]) => ({ value: label, label, seconds }))
+  ];
+  container.innerHTML = items.map(item => {
+    const active = nameKey(item.value) === nameKey(selected);
+    return `<button type="button" class="report-project-total${active ? ' active' : ''}" data-report-project="${escapeHtml(item.value)}"><span>${escapeHtml(item.label)}</span><b>${formatDuration(item.seconds)}</b></button>`;
+  }).join('');
+}
+
 function renderProjectOptions() {
   $('#projectOptions').innerHTML = [`<button class="project-option ${selectedProject === 'All' ? 'active' : ''}" data-project="All"><i></i>All work</button>`, ...taskOptions.map(project => `<button class="project-option ${selectedProject === project ? 'active' : ''}" data-project="${escapeHtml(project)}"><i></i>${escapeHtml(project)}</button>`)].join('');
+  renderReportProjectOptions();
   const select = $('#employeeProject');
   if (select) select.innerHTML = taskOptions.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
   const taskSelect = $('#taskInput');
@@ -3774,10 +3810,18 @@ function renderReports() {
   if (!$('#reportRows')) return;
   const { start, end, period, payDate, payDateKey } = reportRange();
   const term = ($('#reportEmployee')?.value || '').toLowerCase();
-  const records = (usesSupabase() ? supabaseTimeEntries.map(attendanceRecordFromSupabase) : []).filter(record => {
+  const projectFilter = reportProjectFilter();
+  const allRecords = (usesSupabase() ? supabaseTimeEntries.map((entry, index) => ({
+    ...attendanceRecordFromSupabase(entry, index),
+    project: projectNameForTimeEntry(entry) || 'Uncategorized'
+  })) : []).filter(record => {
     const entryDate = record.dateKey ? businessDateFromKey(record.dateKey) : null;
     return entryDate && entryDate >= start && entryDate <= end && (!term || `${record.name} ${record.role}`.toLowerCase().includes(term));
   });
+  renderReportProjectTotals(allRecords);
+  const records = allRecords.filter(record =>
+    projectFilter === 'All' || nameKey(record.project) === nameKey(projectFilter)
+  );
   const groups = new Map();
   records.forEach(record => {
     const key = `${record.email}-${period === 'day' ? record.dateKey : 'range'}`;
@@ -3791,7 +3835,7 @@ function renderReports() {
     groups.set(key, existing);
   });
   const rows = [...groups.values()].map(row => {
-    const adjustment = adjustmentFor(row.employeeId, start, end);
+    const adjustment = projectFilter === 'All' ? adjustmentFor(row.employeeId, start, end) : null;
     const actualHours = row.seconds / 3600;
     const payableOverride = payableHoursOverrideValue(adjustment);
     const deductedHours = signedHoursFromAdjustment(adjustment, actualHours);
@@ -3818,19 +3862,25 @@ function renderReports() {
     const adjustmentText = row.adjustment ? `${signedHourShort(row.deductedHours)} · -${money(row.deductedAmount)} · +${money(row.commission)} · Holiday ${phpMoney(row.holidayPayPhp)} · Other earnings ${phpMoney(row.otherEarningsPhp)} · Deductions ${phpMoney(row.manualDeductionsPhp)} · Bank ${phpMoney(row.bankFeesPhp)} · Other deduction ${phpMoney(row.otherDeductionsPhp)}` : 'No adjustment';
     return `<div class="report-row payroll-report-row" role="button" tabindex="0" data-report-employee="${row.employeeId}" data-report-name="${encodeURIComponent(row.name)}"><div class="person"><span class="person-avatar" style="background:${row.color}">${row.initials}</span><span>${escapeHtml(row.name)}<small>${escapeHtml(row.role)}</small></span></div><span>${period === 'day' ? escapeHtml(row.date) : `${businessDateLabel(start)} - ${businessDateLabel(end)}`}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span class="adjustment-summary">${adjustmentText}<small>Payable: ${formatDuration(row.payableSeconds)}</small></span><span class="attendance-time">${money(row.netPay)}</span><button class="edit-adjustment-btn" data-edit-adjustment="${row.employeeId}">Edit</button></div>`;
   }).join('') || '<div class="empty-state">No worked hours found for this report.</div>';
-  $('#reportRangeLabel').textContent = `Showing ${businessDateLabel(start)} to ${businessDateLabel(end)}`;
+  $('#reportRangeLabel').textContent = `Showing ${businessDateLabel(start)} to ${businessDateLabel(end)} · ${projectFilter === 'All' ? 'All projects' : projectFilter}`;
 }
 
 function openReportDetail(employeeId, name = '') {
   const { start, end } = reportRange();
-  const rows = buildDailyHoursSummary(employeeId, start, end);
+  const projectFilter = reportProjectFilter();
+  const rows = buildDailyHoursSummary(employeeId, start, end, projectFilter);
   const reportRow = currentReportRows.find(row => row.employeeId === employeeId);
   $('#reportDetailTitle').textContent = name || reportRow?.name || 'Employee hours';
-  $('#reportDetailPeriod').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)}`;
+  $('#reportDetailPeriod').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${projectFilter === 'All' ? 'All projects' : projectFilter}`;
   $('#reportDetailTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
   $('#reportDetailEntryCount').textContent = rows.reduce((sum, row) => sum + row.entries, 0);
   $('#reportDetailDayCount').textContent = rows.length;
-  $('#reportDetailRows').innerHTML = rows.map(row => `<div class="report-row employee-hours-row report-detail-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span>${escapeHtml([...new Set(row.tasks)].join(', '))}</span><span class="report-day-actions"><button class="edit-adjustment-btn" type="button" data-edit-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}">Edit day</button><button class="clear-time-btn" type="button" data-delete-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}">Delete day</button></span></div>`).join('') || '<div class="empty-state">No hours found for this employee in the selected period.</div>';
+  $('#reportDetailRows').innerHTML = rows.map(row => {
+    const actions = projectFilter === 'All'
+      ? `<span class="report-day-actions"><button class="edit-adjustment-btn" type="button" data-edit-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}">Edit day</button><button class="clear-time-btn" type="button" data-delete-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}">Delete day</button></span>`
+      : '<span class="project-filter-note">Project view</span>';
+    return `<div class="report-row employee-hours-row report-detail-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span>${escapeHtml([...new Set(row.tasks)].join(', '))}</span>${actions}</div>`;
+  }).join('') || '<div class="empty-state">No hours found for this employee in the selected period.</div>';
   $('#reportDetailBackdrop').hidden = false;
 }
 
@@ -3882,10 +3932,17 @@ function syncEmployeeReportDatesFromPeriod() {
   $('#employeeReportEnd').value = isoDate(end);
 }
 
-function buildDailyHoursSummary(employeeId, start, end) {
-  const records = (usesSupabase() ? supabaseTimeEntries.map(attendanceRecordFromSupabase) : []).filter(record => {
+function buildDailyHoursSummary(employeeId, start, end, projectFilter = 'All') {
+  const records = (usesSupabase() ? supabaseTimeEntries.map((entry, index) => ({
+    ...attendanceRecordFromSupabase(entry, index),
+    project: projectNameForTimeEntry(entry) || 'Uncategorized'
+  })) : []).filter(record => {
     const entryDate = record.dateKey ? businessDateFromKey(record.dateKey) : null;
-    return record.employeeId === employeeId && entryDate && entryDate >= start && entryDate <= end;
+    return record.employeeId === employeeId &&
+      entryDate &&
+      entryDate >= start &&
+      entryDate <= end &&
+      (projectFilter === 'All' || nameKey(record.project) === nameKey(projectFilter));
   });
   const groups = new Map();
   records.forEach(record => {
@@ -7534,18 +7591,27 @@ $('#employeeReportPeriod').onchange = () => {
   };
 });
 $('#reportEmployee').oninput = renderReports;
+$('#reportProject').onchange = renderReports;
+$('#reportProjectTotals').onclick = event => {
+  const button = event.target.closest('[data-report-project]');
+  if (!button) return;
+  $('#reportProject').value = button.dataset.reportProject;
+  renderReports();
+};
 $('#reportExport').onclick = () => {
   const { start, end, period } = reportRange();
+  const projectFilter = reportProjectFilter();
   const rows = currentReportRows.map(row => [
-    row.name, row.email, row.role, businessDateLabel(start), businessDateLabel(end), period, row.entries,
+    row.name, row.email, row.role, projectFilter === 'All' ? 'All projects' : projectFilter, businessDateLabel(start), businessDateLabel(end), period, row.entries,
     (row.seconds / 3600).toFixed(2), row.deductedHours.toFixed(2), row.deductedAmount.toFixed(2),
     row.commission.toFixed(2), row.holidayPayPhp.toFixed(2), row.otherEarningsPhp.toFixed(2),
     row.manualDeductionsPhp.toFixed(2), row.bankFeesPhp.toFixed(2), row.otherDeductionsPhp.toFixed(2),
     (row.payableSeconds / 3600).toFixed(2), row.pay.toFixed(2),
     row.netPay.toFixed(2), row.adjustment?.note || ''
   ].map(csvCell).join(','));
-  const header = ['Employee', 'Email', 'Role', 'From', 'To', 'Period', 'Entries', 'Worked Hours', 'Hour Adjustment', 'Deducted Amount USD', 'Commission USD', 'Holiday Pay PHP', 'Other Earnings PHP', 'Manual Deductions PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Payable Hours', 'Gross Pay USD', 'Net Pay USD', 'Adjustment Note'];
-  exportCsv(`sync2time-payroll-${isoDate(start)}-to-${isoDate(end)}.csv`, [header.map(csvCell).join(','), ...rows].join('\r\n'), 'Payroll report exported as CSV.');
+  const header = ['Employee', 'Email', 'Role', 'Project', 'From', 'To', 'Period', 'Entries', 'Worked Hours', 'Hour Adjustment', 'Deducted Amount USD', 'Commission USD', 'Holiday Pay PHP', 'Other Earnings PHP', 'Manual Deductions PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Payable Hours', 'Gross Pay USD', 'Net Pay USD', 'Adjustment Note'];
+  const projectSlug = (projectFilter === 'All' ? 'all-projects' : projectFilter).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  exportCsv(`sync2time-${projectSlug}-report-${isoDate(start)}-to-${isoDate(end)}.csv`, [header.map(csvCell).join(','), ...rows].join('\r\n'), 'Project-filtered report exported as CSV.');
 };
 
 $('#payrollTabs').onclick = event => {

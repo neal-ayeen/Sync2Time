@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260727-project-employee-search-4" />
+  <link rel="stylesheet" href="styles.css?v=20260728-report-project-filter-6" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -164,7 +164,8 @@
 
     <section class="reports-section admin-only" id="reports">
       <div class="section-title"><div><p class="eyebrow">REPORTS</p><h2>Total hours worked</h2><p>Review employee totals per day, week, month, or custom date range.</p></div><button class="export" id="reportExport">⇩ Export report</button></div>
-      <div class="report-toolbar report-builder"><label class="filter-label">PERIOD <select id="reportPeriod"><option value="cutoff">Current payroll cutoff</option><option value="previous-cutoff">Previous payroll cutoff</option><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option><option value="custom">Custom date</option></select></label><label class="filter-label">FROM <input id="reportStart" type="date"></label><label class="filter-label">TO <input id="reportEnd" type="date"></label><label class="search"><span>⌕</span><input id="reportEmployee" placeholder="Search employee"></label></div>
+      <div class="report-toolbar report-builder"><label class="filter-label">PERIOD <select id="reportPeriod"><option value="cutoff">Current payroll cutoff</option><option value="previous-cutoff">Previous payroll cutoff</option><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option><option value="custom">Custom date</option></select></label><label class="filter-label">FROM <input id="reportStart" type="date"></label><label class="filter-label">TO <input id="reportEnd" type="date"></label><label class="filter-label">PROJECT <select id="reportProject"><option value="All">All projects</option></select></label><label class="search"><span>⌕</span><input id="reportEmployee" placeholder="Search employee"></label></div>
+      <div class="report-project-totals" id="reportProjectTotals" aria-label="Project hour totals"></div>
       <div class="report-metrics"><article><span>TOTAL HOURS</span><b id="reportTotalHours">0h 00m</b><small>Selected range</small></article><article><span>EMPLOYEES</span><b id="reportEmployeeCount">0</b><small>With tracked time</small></article><article><span>ENTRIES</span><b id="reportEntryCount">0</b><small>Clock records</small></article><article><span>PAY ESTIMATE</span><b id="reportPayEstimate">$0.00</b><small>Holiday multiplier included</small></article><article><span>PAY DATE</span><b id="reportPayDate">—</b><small id="reportPayDateNote">For payroll cutoffs</small></article></div>
       <div class="attendance-card"><div class="report-table-head payroll-report-head"><span>EMPLOYEE</span><span>DATE / RANGE</span><span>ENTRIES</span><span>WORKED</span><span>ADJUSTMENTS</span><span>NET PAY</span><span>ACTION</span></div><div id="reportRows"></div><div class="report-footer"><span id="reportRangeLabel">Showing today's report</span><span>Deleted entries are excluded</span></div></div>
     </section>
@@ -419,6 +420,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260728-emily-payroll-split-5"></script>
+  <script src="app.js?v=20260728-report-project-filter-6"></script>
 </body>
 </html>
