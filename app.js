@@ -4402,7 +4402,8 @@ function holidayDatesInRange(start, end) {
 
 function adminWorkUnitForDate(date) {
   const day = businessDateFromKey(isoDate(date)).getUTCDay();
-  if (day >= 1 && day <= 6) return 1;
+  if (day >= 1 && day <= 5) return 1;
+  if (day === 6) return 0.5;
   return 0;
 }
 
@@ -4436,12 +4437,13 @@ function adminAttendanceMetrics(entries, start, end) {
   let cursor = businessDateFromKey(isoDate(start));
   const last = businessDateFromKey(isoDate(end));
   while (cursor <= last) {
-    if (adminWorkUnitForDate(cursor)) {
+    const workUnit = adminWorkUnitForDate(cursor);
+    if (workUnit) {
       const dateKey = isoDate(cursor);
-      scheduledDays++;
-      if (workedDateKeys.has(dateKey)) workedDays++;
-      else if (dateKey < todayKey) absentDays++;
-      else pendingDays++;
+      scheduledDays += workUnit;
+      if (workedDateKeys.has(dateKey)) workedDays += workUnit;
+      else if (dateKey < todayKey) absentDays += workUnit;
+      else pendingDays += workUnit;
     }
     cursor = addBusinessDays(cursor, 1);
   }
@@ -4713,7 +4715,7 @@ function renderPayroll() {
     const approvalLabel = row.paystubApproved ? 'Approved' : 'Approve';
     const edit = `<span class="payroll-actions"><button class="approve-paystub-btn ${row.paystubApproved ? 'approved' : ''}" data-approve-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="No paystub recipient"'}>${approvalLabel}</button><button class="quick-hours-btn" data-quick-hours="${row.person.id}">Hours</button><button class="edit-adjustment-btn" data-payroll-edit="${row.person.id}">Edit</button><button class="edit-adjustment-btn" data-payroll-recipient="${row.person.id}">Recipient</button><button class="paystub-btn" data-paystub="${row.person.id}">Paystub</button><button class="manual-email-btn" data-email-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="Add a paystub recipient first"'}>Email</button></span>`;
     if (selectedPayrollRole === 'coaches') return `<div class="payroll-row coaches">${person}<span>${row.expectedHours.toFixed(2)}</span>${payrollHourChip(row)}<span>${row.otHours.toFixed(2)}</span><span>$${row.hourlyUsd.toFixed(2)}</span><span>₱${fx.toFixed(4)}</span><span class="payroll-money">$${row.grossUsd.toFixed(2)}</span><span class="payroll-money">${phpMoney(row.grossPhp)}</span>${coachAdjustmentStack(row)}<b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
-    if (selectedPayrollRole === 'admin') return `<div class="payroll-row admin">${person}<span>${row.expectedHours.toFixed(2)}</span>${payrollHourChip(row)}<span>${row.otHours.toFixed(2)}</span><span class="payroll-money payroll-adjustment-stack" title="Base cutoff pay ${phpMoney(row.cutoffPay)} divided by ${row.adminScheduledDays} scheduled workdays">${phpMoney(row.adminAttendancePay)}<small>${phpMoney(row.adminDailyRate)}/day · ${row.adminWorkedDays} worked · ${row.adminAbsentDays} absent${row.adminPendingDays ? ` · ${row.adminPendingDays} pending` : ''}</small></span><span class="payroll-money">${phpMoney(row.otPay)}</span>${adminDeductionsStack(row)}<span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
+    if (selectedPayrollRole === 'admin') return `<div class="payroll-row admin">${person}<span>${row.expectedHours.toFixed(2)}</span>${payrollHourChip(row)}<span>${row.otHours.toFixed(2)}</span><span class="payroll-money payroll-adjustment-stack" title="Base cutoff pay ${phpMoney(row.cutoffPay)} divided by ${row.adminScheduledDays} workday units; Saturday counts as 0.5">${phpMoney(row.adminAttendancePay)}<small>${phpMoney(row.adminDailyRate)}/day · ${row.adminWorkedDays} worked · ${row.adminAbsentDays} absent${row.adminPendingDays ? ` · ${row.adminPendingDays} pending` : ''}</small></span><span class="payroll-money">${phpMoney(row.otPay)}</span>${adminDeductionsStack(row)}<span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
     return `<div class="payroll-row ${selectedPayrollRole}">${person}<span class="payroll-money">${phpMoney(row.grossPhp)}</span>${generalAdjustmentStack(row)}<span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
   }).join('') || '<div class="empty-state">No employees are assigned to this role group.</div>';
   $('#payrollEmployeeCount').textContent = currentPayrollRows.length;
@@ -4724,7 +4726,7 @@ function renderPayroll() {
   $('#payrollNetPay').textContent = phpMoney(currentPayrollRows.reduce((sum, row) => sum + row.netPay, 0));
   $('#payrollRangeLabel').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${selectedPayrollRole.toUpperCase()}`;
   $('#payrollFooterHint').textContent = selectedPayrollRole === 'admin'
-    ? 'Admin pay is prorated per attended workday: 8 expected hours Monday-Friday and 30 minutes Saturday. A completed scheduled day with no logged time deducts one daily rate.'
+    ? 'Admin pay is prorated by workday units: Monday-Friday counts as 1 day and Saturday counts as 0.5 day. A missed Saturday deducts half of the daily rate.'
     : 'Click Actual Hrs or Hours to adjust time quickly. Admin SSS, PhilHealth, and Pag-IBIG amounts are editable and charged only on the 1-15 cutoff paid on the 20th.';
   const approvedCount = currentPayrollRows.filter(row => row.paystubApproved).length;
   const recipientCount = currentPayrollRows.filter(row => paystubRecipients.some(item => item.employee_id === row.person.id)).length;
