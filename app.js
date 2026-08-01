@@ -5319,19 +5319,13 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
   doc.line(38, 216, pageWidth - 38, 216);
   const lines = [];
   if (selectedPayrollRole === 'coaches') {
-    lines.push(['Expected hours', row.expectedHours.toFixed(2)]);
     lines.push(['Actual hours', row.actualHours.toFixed(2)]);
     lines.push(['Payable hours', row.payableHours.toFixed(2)]);
-    lines.push(['Hour adjustment', signedHourShort(row.deductedHours)]);
     lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
-    lines.push(['Pending OT hours', row.pendingOtHours.toFixed(2)]);
     lines.push(['Rejected excess hours', row.rejectedOtHours.toFixed(2)]);
     lines.push(['USD hourly rate', `USD ${row.hourlyUsd.toFixed(2)}`]);
     lines.push(['USD to PHP rate', payrollUsdPhpRate().toFixed(4)]);
-    lines.push(['Gross USD pay', `USD ${row.grossUsd.toFixed(2)}`]);
-    lines.push(['Gross PHP pay', `PHP ${row.grossPhp.toFixed(2)}`]);
     lines.push(['Holiday pay', `PHP ${Number(row.holidayPayPhp || 0).toFixed(2)}`]);
-    lines.push(['Hour adjustment value', signedPhpPlain(row.quickDeductionPhp)]);
     lines.push(['Adjustments', `PHP ${row.adjustment.toFixed(2)}`]);
     lines.push(['Other earnings', `PHP ${Number(row.otherEarnings || 0).toFixed(2)}`]);
     lines.push(['Deductions', `PHP ${row.deductions.toFixed(2)}`]);
@@ -5342,18 +5336,14 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Bank fees', `PHP ${Number(row.bankFees || 0).toFixed(2)}`]);
     lines.push(['Other deduction', `PHP ${Number(row.otherDeductions || 0).toFixed(2)}`]);
   } else if (selectedPayrollRole === 'admin') {
-    lines.push(['Expected hours', row.expectedHours.toFixed(2)]);
     lines.push(['Actual hours', row.actualHours.toFixed(2)]);
     lines.push(['Payable hours', row.payableHours.toFixed(2)]);
-    lines.push(['Hour adjustment', signedHourShort(row.deductedHours)]);
     lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
-    lines.push(['Pending OT hours', row.pendingOtHours.toFixed(2)]);
     lines.push(['Rejected excess hours', row.rejectedOtHours.toFixed(2)]);
     lines.push(['Cutoff pay', `PHP ${row.cutoffPay.toFixed(2)}`]);
     lines.push(['OT pay', `PHP ${row.otPay.toFixed(2)}`]);
     lines.push(['Gross pay', `PHP ${row.grossPhp.toFixed(2)}`]);
     lines.push(['Holiday pay', `PHP ${Number(row.holidayPayPhp || 0).toFixed(2)}`]);
-    lines.push(['Hour adjustment value', signedPhpPlain(row.quickDeductionPhp)]);
     lines.push(['Adjustments', `PHP ${row.adjustment.toFixed(2)}`]);
     lines.push(['Other earnings', `PHP ${Number(row.otherEarnings || 0).toFixed(2)}`]);
     lines.push(['Manual deductions', `PHP ${row.deductions.toFixed(2)}`]);
@@ -5368,12 +5358,9 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Gross pay', `PHP ${row.grossPhp.toFixed(2)}`]);
     lines.push(['Actual hours', row.actualHours.toFixed(2)]);
     lines.push(['Payable hours', row.payableHours.toFixed(2)]);
-    lines.push(['Hour adjustment', signedHourShort(row.deductedHours)]);
     lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
-    lines.push(['Pending OT hours', row.pendingOtHours.toFixed(2)]);
     lines.push(['Rejected excess hours', row.rejectedOtHours.toFixed(2)]);
     lines.push(['Holiday pay', `PHP ${Number(row.holidayPayPhp || 0).toFixed(2)}`]);
-    lines.push(['Hour adjustment value', signedPhpPlain(row.quickDeductionPhp)]);
     lines.push(['Adjustments', `PHP ${row.adjustment.toFixed(2)}`]);
     lines.push(['Other earnings', `PHP ${Number(row.otherEarnings || 0).toFixed(2)}`]);
     lines.push(['Deductions', `PHP ${row.deductions.toFixed(2)}`]);
