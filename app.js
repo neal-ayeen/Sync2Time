@@ -129,6 +129,7 @@ let paystubEmailTemplates = JSON.parse(localStorage.getItem('sync2time-paystub-e
 let selectedPaystubEmailTemplateId = localStorage.getItem('sync2time-paystub-email-template-selected') || paystubEmailTemplates[0]?.id || '';
 let emailingPayrollRow = null;
 let currentReportRows = [];
+let activeReportDetail = null;
 let currentPayrollRows = [];
 let currentAdjustmentRows = [];
 let currentEmployeeReportRows = [];
@@ -512,6 +513,15 @@ function parseLiveActivity(value, note = '') {
 
 function formatDuration(seconds) {
   return `${Math.floor(seconds / 3600)}h ${pad(Math.floor(seconds % 3600 / 60))}m`;
+}
+
+function formatDecimalHours(seconds) {
+  const hours = Math.max(0, Number(seconds) || 0) / 3600;
+  return `${Number(hours.toFixed(2))}h`;
+}
+
+function formatDurationWithDecimal(seconds) {
+  return `${formatDuration(seconds)} · ${formatDecimalHours(seconds)}`;
 }
 
 function formatClock(date) {
@@ -2859,8 +2869,8 @@ function render() {
   $('#lunchButton').classList.toggle('running', !!state.lunch);
 
   const total = totalSeconds();
-  $('#hoursTotal').textContent = formatDuration(total);
-  $('#tableTotal').textContent = formatDuration(total);
+  $('#hoursTotal').textContent = formatDurationWithDecimal(total);
+  $('#tableTotal').textContent = formatDurationWithDecimal(total);
   $('#clockInDisplay').textContent = state.clockIn ? formatClock(state.clockIn) : 'Not clocked in yet';
   $('#clockOutDisplay').textContent = state.clockOut ? formatClock(state.clockOut) : '—';
   $('#workdayTotal').textContent = state.clockIn ? new Date(total * 1000).toISOString().slice(11, 16) : '00:00';
@@ -3208,14 +3218,14 @@ function renderProjectReport() {
   const { startKey, endKey } = projectReportRange();
   const projectLabel = selectedProject === 'All' ? 'All project' : selectedProject;
   $('#projectReportTitle').textContent = `${projectLabel} hours by day`;
-  $('#projectReportTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
+  $('#projectReportTotalHours').textContent = formatDurationWithDecimal(rows.reduce((sum, row) => sum + row.seconds, 0));
   $('#projectReportEmployeeCount').textContent = new Set(rows.map(row => row.employeeId)).size;
   $('#projectReportDayCount').textContent = new Set(rows.map(row => row.dateKey)).size;
   $('#projectReportEntryCount').textContent = rows.reduce((sum, row) => sum + row.entries, 0);
   $('#projectReportRows').innerHTML = rows.map(row => {
     const details = [...row.tasks].join(', ');
     const notes = [...row.notes].join(' · ');
-    return `<div class="project-report-row"><span class="project-report-date">${escapeHtml(row.dateLabel)}</span><div class="person"><span class="person-avatar" style="background:${row.color}">${escapeHtml(row.initials)}</span><span>${escapeHtml(row.employeeName)}<small>${escapeHtml(row.employeeRole)}</small></span></div><span class="project-tag">${escapeHtml(row.project)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span class="project-report-details">${escapeHtml(details || row.project)}${notes ? `<small>${escapeHtml(notes)}</small>` : ''}</span></div>`;
+    return `<div class="project-report-row"><span class="project-report-date">${escapeHtml(row.dateLabel)}</span><div class="person"><span class="person-avatar" style="background:${row.color}">${escapeHtml(row.initials)}</span><span>${escapeHtml(row.employeeName)}<small>${escapeHtml(row.employeeRole)}</small></span></div><span class="project-tag">${escapeHtml(row.project)}</span><span>${row.entries}</span><span class="attendance-time">${formatDurationWithDecimal(row.seconds)}</span><span class="project-report-details">${escapeHtml(details || row.project)}${notes ? `<small>${escapeHtml(notes)}</small>` : ''}</span></div>`;
   }).join('') || `<div class="empty-state">No ${selectedProject === 'All' ? 'project' : escapeHtml(selectedProject)} time was recorded within these dates.</div>`;
   $('#projectReportRange').textContent = `${projectLabel} · ${businessDateLabel(businessStartFromKey(startKey))} to ${businessDateLabel(businessEndFromKey(endKey))}`;
 }
@@ -3277,7 +3287,7 @@ function renderEmployeeProjectTotals(rows = []) {
   ];
   container.innerHTML = items.map(item => {
     const active = nameKey(item.value) === nameKey(selected);
-    return `<button type="button" class="employee-project-total${active ? ' active' : ''}" data-employee-report-project="${escapeHtml(item.value)}"><span>${escapeHtml(item.label)}</span><b>${formatDuration(item.seconds)}</b></button>`;
+    return `<button type="button" class="employee-project-total${active ? ' active' : ''}" data-employee-report-project="${escapeHtml(item.value)}"><span>${escapeHtml(item.label)}</span><b>${formatDurationWithDecimal(item.seconds)}</b></button>`;
   }).join('') || '<span class="empty-state">No project hours within this period.</span>';
 }
 
@@ -3298,7 +3308,7 @@ function renderReportProjectTotals(records = []) {
   ];
   container.innerHTML = items.map(item => {
     const active = nameKey(item.value) === nameKey(selected);
-    return `<button type="button" class="report-project-total${active ? ' active' : ''}" data-report-project="${escapeHtml(item.value)}"><span>${escapeHtml(item.label)}</span><b>${formatDuration(item.seconds)}</b></button>`;
+    return `<button type="button" class="report-project-total${active ? ' active' : ''}" data-report-project="${escapeHtml(item.value)}"><span>${escapeHtml(item.label)}</span><b>${formatDurationWithDecimal(item.seconds)}</b></button>`;
   }).join('');
 }
 
@@ -3479,7 +3489,7 @@ function renderAiAlerts() {
   $('#aiAlertNewCount').textContent = overtimeAlerts.filter(alert => alert.status === 'new').length;
   $('#aiAlertHighCount').textContent = overtimeAlerts.filter(alert => alert.severity === 'high').length;
   $('#aiAlertPayrollCount').textContent = overtimeAlerts.filter(alert => alert.status === 'payroll_pending').length;
-  $('#aiAlertPendingHours').textContent = formatDuration(overtimeAlerts.filter(alert => ['new', 'pending_employee_explanation', 'payroll_pending'].includes(alert.status)).reduce((sum, alert) => sum + Number(alert.excess_hours || 0) * 3600, 0));
+  $('#aiAlertPendingHours').textContent = formatDurationWithDecimal(overtimeAlerts.filter(alert => ['new', 'pending_employee_explanation', 'payroll_pending'].includes(alert.status)).reduce((sum, alert) => sum + Number(alert.excess_hours || 0) * 3600, 0));
   $('#aiAlertRows').innerHTML = alerts.map(alert => {
     const name = alertEmployeeName(alert);
     const hours = `<b>${Number(alert.actual_hours || 0).toFixed(2)}h</b><small>Allowed ${Number(alert.allowed_hours || 0).toFixed(2)}h · Excess ${Number(alert.excess_hours || 0).toFixed(2)}h</small><small>${alert.has_approved_ot ? 'Approved OT context found' : 'No approved OT found'}</small>`;
@@ -3895,7 +3905,7 @@ function renderReports() {
     return { ...row, adjustment, payableOverride, deductedHours, deductedAmount, commission, holidayPayPhp, otherEarningsPhp, manualDeductionsPhp, bankFeesPhp, otherDeductionsPhp, payableSeconds, netPay };
   });
   currentReportRows = rows;
-  $('#reportTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
+  $('#reportTotalHours').textContent = formatDurationWithDecimal(rows.reduce((sum, row) => sum + row.seconds, 0));
   $('#reportEmployeeCount').textContent = new Set(rows.map(row => row.email)).size;
   $('#reportEntryCount').textContent = records.length;
   $('#reportPayEstimate').textContent = money(rows.reduce((sum, row) => sum + row.netPay, 0));
@@ -3903,19 +3913,32 @@ function renderReports() {
   $('#reportPayDateNote').textContent = payDate ? (businessDateFromKey(payDateKey) < businessDateFromKey(isoDate(todayDate)) ? 'Completed payroll date' : 'Scheduled payroll date') : 'Only applies to payroll cutoffs';
   $('#reportRows').innerHTML = rows.map(row => {
     const adjustmentText = row.adjustment ? `${signedHourShort(row.deductedHours)} · -${money(row.deductedAmount)} · +${money(row.commission)} · Holiday ${phpMoney(row.holidayPayPhp)} · Other earnings ${phpMoney(row.otherEarningsPhp)} · Deductions ${phpMoney(row.manualDeductionsPhp)} · Bank ${phpMoney(row.bankFeesPhp)} · Other deduction ${phpMoney(row.otherDeductionsPhp)}` : 'No adjustment';
-    return `<div class="report-row payroll-report-row" role="button" tabindex="0" data-report-employee="${row.employeeId}" data-report-name="${encodeURIComponent(row.name)}"><div class="person"><span class="person-avatar" style="background:${row.color}">${row.initials}</span><span>${escapeHtml(row.name)}<small>${escapeHtml(row.role)}</small></span></div><span>${period === 'day' ? escapeHtml(row.date) : `${businessDateLabel(start)} - ${businessDateLabel(end)}`}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span class="adjustment-summary">${adjustmentText}<small>Payable: ${formatDuration(row.payableSeconds)}</small></span><span class="attendance-time">${money(row.netPay)}</span><button class="edit-adjustment-btn" data-edit-adjustment="${row.employeeId}">Edit</button></div>`;
+    return `<div class="report-row payroll-report-row" role="button" tabindex="0" data-report-employee="${row.employeeId}" data-report-name="${encodeURIComponent(row.name)}"><div class="person"><span class="person-avatar" style="background:${row.color}">${row.initials}</span><span>${escapeHtml(row.name)}<small>${escapeHtml(row.role)}</small></span></div><span>${period === 'day' ? escapeHtml(row.date) : `${businessDateLabel(start)} - ${businessDateLabel(end)}`}</span><span>${row.entries}</span><span class="attendance-time">${formatDurationWithDecimal(row.seconds)}</span><span class="adjustment-summary">${adjustmentText}<small>Payable: ${formatDurationWithDecimal(row.payableSeconds)}</small></span><span class="attendance-time">${money(row.netPay)}</span><button class="edit-adjustment-btn" data-edit-adjustment="${row.employeeId}">Edit</button></div>`;
   }).join('') || '<div class="empty-state">No worked hours found for this report.</div>';
   $('#reportRangeLabel').textContent = `Showing ${businessDateLabel(start)} to ${businessDateLabel(end)} · ${projectFilter === 'All' ? 'All projects' : projectFilter}`;
 }
 
-function openReportDetail(employeeId, name = '') {
+function populateReportDetailProjectOptions(employeeId, start, end, preferred = 'All') {
+  const select = $('#reportDetailProject');
+  const projects = [...new Set(buildDailyHoursSummary(employeeId, start, end, 'All').map(row => row.project))]
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+  select.innerHTML = '<option value="All">All projects</option>' +
+    projects.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
+  const matchingProject = projects.find(project => nameKey(project) === nameKey(preferred));
+  select.value = matchingProject || 'All';
+}
+
+function renderReportDetail() {
+  if (!activeReportDetail) return;
+  const { employeeId, name } = activeReportDetail;
   const { start, end } = reportRange();
-  const projectFilter = reportProjectFilter();
+  const projectFilter = $('#reportDetailProject')?.value || 'All';
   const rows = buildDailyHoursSummary(employeeId, start, end, projectFilter);
   const reportRow = currentReportRows.find(row => row.employeeId === employeeId);
   $('#reportDetailTitle').textContent = name || reportRow?.name || 'Employee hours';
   $('#reportDetailPeriod').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${projectFilter === 'All' ? 'All projects' : projectFilter}`;
-  $('#reportDetailTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
+  $('#reportDetailTotalHours').textContent = formatDurationWithDecimal(rows.reduce((sum, row) => sum + row.seconds, 0));
   $('#reportDetailEntryCount').textContent = rows.reduce((sum, row) => sum + row.entries, 0);
   $('#reportDetailDayCount').textContent = new Set(rows.map(row => row.dateKey)).size;
   $('#reportDetailRows').innerHTML = rows.map(row => {
@@ -3925,13 +3948,24 @@ function openReportDetail(employeeId, name = '') {
       ...row.notes
     ].filter(Boolean))].join(' · ');
     const actions = `<span class="report-day-actions"><button class="edit-adjustment-btn" type="button" data-edit-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}" data-report-day-project="${encodedProject}">Edit day</button><button class="clear-time-btn" type="button" data-delete-report-day="${escapeHtml(row.dateKey)}" data-report-day-employee="${escapeHtml(employeeId)}" data-report-day-name="${encodeURIComponent(name || reportRow?.name || 'Employee')}" data-report-day-label="${encodeURIComponent(row.dateLabel)}" data-report-day-seconds="${row.seconds}" data-report-day-project="${encodedProject}">Delete day</button></span>`;
-    return `<div class="report-row employee-hours-row report-detail-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span class="report-project-detail"><b>${escapeHtml(row.project)}</b><small>${escapeHtml(details || 'Tracked time')}</small></span>${actions}</div>`;
+    return `<div class="report-row employee-hours-row report-detail-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDurationWithDecimal(row.seconds)}</span><span class="report-project-detail"><b>${escapeHtml(row.project)}</b><small>${escapeHtml(details || 'Tracked time')}</small></span>${actions}</div>`;
   }).join('') || '<div class="empty-state">No hours found for this employee in the selected period.</div>';
+}
+
+function openReportDetail(employeeId, name = '') {
+  const { start, end } = reportRange();
+  const previousFilter = activeReportDetail?.employeeId === employeeId
+    ? ($('#reportDetailProject')?.value || 'All')
+    : reportProjectFilter();
+  activeReportDetail = { employeeId, name };
+  populateReportDetailProjectOptions(employeeId, start, end, previousFilter);
+  renderReportDetail();
   $('#reportDetailBackdrop').hidden = false;
 }
 
 function closeReportDetail() {
   $('#reportDetailBackdrop').hidden = true;
+  activeReportDetail = null;
 }
 
 function closeReportDayHoursEditor() {
@@ -4024,12 +4058,12 @@ function renderEmployeeHoursReport() {
   const rows = allRows.filter(row => projectFilter === 'All' || nameKey(row.project) === nameKey(projectFilter));
   renderEmployeeProjectTotals(allRows);
   currentEmployeeReportRows = rows;
-  $('#employeeReportTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
+  $('#employeeReportTotalHours').textContent = formatDurationWithDecimal(rows.reduce((sum, row) => sum + row.seconds, 0));
   $('#employeeReportDayCount').textContent = new Set(rows.map(row => row.dateKey)).size;
   $('#employeeReportEntryCount').textContent = rows.reduce((sum, row) => sum + row.entries, 0);
   $('#employeeReportRows').innerHTML = rows.map(row => {
     const details = [...new Set([...row.tasks.filter(task => nameKey(task) !== nameKey(row.project)), ...row.notes].filter(Boolean))].join(' · ');
-    return `<div class="report-row employee-hours-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span><b>${escapeHtml(row.project)}</b>${details ? `<small>${escapeHtml(details)}</small>` : ''}</span></div>`;
+    return `<div class="report-row employee-hours-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDurationWithDecimal(row.seconds)}</span><span><b>${escapeHtml(row.project)}</b>${details ? `<small>${escapeHtml(details)}</small>` : ''}</span></div>`;
   }).join('') || '<div class="empty-state">No hours found for this period.</div>';
   $('#employeeReportRangeLabel').textContent = `Showing ${businessDateLabel(start)} to ${businessDateLabel(end)} · ${projectFilter === 'All' ? 'All projects' : projectFilter}`;
 }
@@ -4641,10 +4675,10 @@ function renderPayroll() {
     return `<div class="payroll-row ${selectedPayrollRole}">${person}<span class="payroll-money">${phpMoney(row.grossPhp)}</span>${generalAdjustmentStack(row)}<span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
   }).join('') || '<div class="empty-state">No employees are assigned to this role group.</div>';
   $('#payrollEmployeeCount').textContent = currentPayrollRows.length;
-  $('#payrollActualHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.actualHours * 3600, 0));
-  $('#payrollOtHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.otHours * 3600, 0));
-  $('#payrollPendingOtHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.pendingOtHours * 3600, 0));
-  $('#payrollRejectedOtHours').textContent = formatDuration(currentPayrollRows.reduce((sum, row) => sum + row.rejectedOtHours * 3600, 0));
+  $('#payrollActualHours').textContent = formatDurationWithDecimal(currentPayrollRows.reduce((sum, row) => sum + row.actualHours * 3600, 0));
+  $('#payrollOtHours').textContent = formatDurationWithDecimal(currentPayrollRows.reduce((sum, row) => sum + row.otHours * 3600, 0));
+  $('#payrollPendingOtHours').textContent = formatDurationWithDecimal(currentPayrollRows.reduce((sum, row) => sum + row.pendingOtHours * 3600, 0));
+  $('#payrollRejectedOtHours').textContent = formatDurationWithDecimal(currentPayrollRows.reduce((sum, row) => sum + row.rejectedOtHours * 3600, 0));
   $('#payrollNetPay').textContent = phpMoney(currentPayrollRows.reduce((sum, row) => sum + row.netPay, 0));
   $('#payrollRangeLabel').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${selectedPayrollRole.toUpperCase()}`;
   $('#payrollFooterHint').textContent = 'Click Actual Hrs or Hours to adjust time quickly. Admin SSS, PhilHealth, and Pag-IBIG amounts are editable and charged only on the 1-15 cutoff paid on the 20th.';
@@ -4873,7 +4907,7 @@ function renderAdjustmentCenter() {
       <button class="start-btn" type="button" data-save-adjustment-row="${index}">Save</button>
     </div>`;
   }).join('') || '<div class="empty-state">No employees found for this selected period.</div>';
-  $('#adjustmentCenterActualHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.actualHours * 3600, 0));
+  $('#adjustmentCenterActualHours').textContent = formatDurationWithDecimal(rows.reduce((sum, row) => sum + row.actualHours * 3600, 0));
   $('#adjustmentCenterGross').textContent = phpMoney(rows.reduce((sum, row) => sum + row.grossPhp, 0));
   $('#adjustmentCenterHoliday').textContent = phpMoney(rows.reduce((sum, row) => sum + row.holidayPayPhp, 0));
   $('#adjustmentCenterNet').textContent = phpMoney(rows.reduce((sum, row) => sum + row.netPay, 0));
@@ -7745,6 +7779,7 @@ $('#approvalDetailReject').onclick = async () => {
 $('#reportDetailClose').onclick = closeReportDetail;
 $('#reportDetailDone').onclick = closeReportDetail;
 $('#reportDetailBackdrop').onclick = event => { if (event.target === event.currentTarget) closeReportDetail(); };
+$('#reportDetailProject').onchange = renderReportDetail;
 $('#reportDayEditForm').onsubmit = submitReportDayHoursEdit;
 $('#reportDayEditClose').onclick = closeReportDayHoursEditor;
 $('#reportDayEditCancel').onclick = closeReportDayHoursEditor;
