@@ -4147,15 +4147,21 @@ function payrollEntryEmployeeId(person) {
 }
 
 function scheduledHoursInRange(person, start, end) {
-  if (person.scheduledStart === null || person.scheduledEnd === null) return 0;
-  let daily = person.scheduledEnd - person.scheduledStart;
-  if (daily <= 0) daily += 1440;
-  daily /= 60;
+  const role = payrollRole(person);
+  let daily;
+  if (role === 'coaches') {
+    daily = 3;
+  } else {
+    if (person.scheduledStart === null || person.scheduledEnd === null) return 0;
+    daily = person.scheduledEnd - person.scheduledStart;
+    if (daily <= 0) daily += 1440;
+    daily /= 60;
+  }
   let workUnits = 0;
   let cursor = businessDateFromKey(isoDate(start));
   const last = businessDateFromKey(isoDate(end));
   while (cursor <= last) {
-    if (payrollRole(person) === 'admin') {
+    if (role === 'admin') {
       workUnits += adminWorkUnitForDate(cursor);
     } else if (cursor.getUTCDay() !== 0 && cursor.getUTCDay() !== 6) {
       workUnits++;
