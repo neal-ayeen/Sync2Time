@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260801-employee-project-hours-9" />
+  <link rel="stylesheet" href="styles.css?v=20260801-itemized-adjustments-10" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -362,6 +362,20 @@
       <div class="modal-actions"><button class="secondary" id="reportDayEditCancel" type="button">Cancel</button><button class="start-btn" id="reportDayEditSave" type="submit">Save corrected hours</button></div>
     </form>
   </div>
+  <div class="modal-backdrop" id="adjustmentItemsBackdrop" hidden>
+    <form class="modal adjustment-items-modal" id="adjustmentItemsForm">
+      <button type="button" class="modal-close" id="adjustmentItemsClose" aria-label="Close itemized payroll editor">&times;</button>
+      <p class="eyebrow">ITEMIZED PAYROLL ENTRY</p>
+      <h2 id="adjustmentItemsTitle">Other earnings</h2>
+      <p class="adjustment-period" id="adjustmentItemsEmployee">Employee · Selected cutoff</p>
+      <p class="adjustment-items-help">Add every amount on its own line with a note. Sync2Time automatically totals all lines and uses that total throughout payroll, reports, paystubs, and integrations.</p>
+      <div class="adjustment-item-lines" id="adjustmentItemLines"></div>
+      <button class="secondary add-adjustment-item" id="addAdjustmentItemLine" type="button">+ Add another item</button>
+      <div class="adjustment-items-total"><span>TOTAL</span><b id="adjustmentItemsTotal">₱0.00</b></div>
+      <p class="login-error" id="adjustmentItemsError" hidden></p>
+      <div class="modal-actions"><button class="secondary" id="adjustmentItemsCancel" type="button">Cancel</button><button class="start-btn" id="adjustmentItemsSave" type="submit">Save items</button></div>
+    </form>
+  </div>
   <div class="toast" id="toast"></div>
   <div class="modal-backdrop" id="longSessionBackdrop" hidden>
     <section class="modal long-session-modal" role="alertdialog" aria-modal="true" aria-labelledby="longSessionTitle">
@@ -422,6 +436,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260801-employee-project-hours-9"></script>
+  <script src="app.js?v=20260801-itemized-adjustments-10"></script>
 </body>
 </html>

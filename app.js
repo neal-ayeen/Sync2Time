@@ -157,6 +157,13 @@ let editingPayrollRow = null;
 let editingPayrollAdjustment = null;
 let editingQuickHoursRow = null;
 let pendingReportDayEdit = null;
+let editingAdjustmentItems = null;
+const adjustmentItemDrafts = new Map();
+const ITEMIZED_ADJUSTMENT_TYPES = {
+  otherEarnings: { label: 'Other earnings', dbField: 'other_earnings_items', rowField: 'otherEarningsItems', totalField: 'otherEarnings' },
+  deductions: { label: 'Deductions', dbField: 'deduction_items', rowField: 'deductionItems', totalField: 'deductions' },
+  otherDeductions: { label: 'Other deduction', dbField: 'other_deduction_items', rowField: 'otherDeductionItems', totalField: 'otherDeductions' }
+};
 let quickBooksStatus = { checked: false, connected: false, message: 'QuickBooks status has not been checked yet.' };
 let quickBooksSyncInProgress = false;
 const QUICKBOOKS_MAPPING_STORAGE_KEY = 'sync2time-quickbooks-payroll-mapping';
@@ -4405,8 +4412,11 @@ function payrollAdjustmentValues(person, start, end) {
     deductions: Number(adjustment?.deductions_php ?? adjustment?.deductionsPhp ?? 0),
     commission: Number(adjustment?.commission_php ?? adjustment?.commissionPhp ?? adjustment?.commission ?? 0),
     otherEarnings: Number(adjustment?.other_earnings_php ?? adjustment?.otherEarningsPhp ?? 0),
+    otherEarningsItems: normalizeAdjustmentItems(adjustment?.other_earnings_items ?? adjustment?.otherEarningsItems),
+    deductionItems: normalizeAdjustmentItems(adjustment?.deduction_items ?? adjustment?.deductionItems),
     bankFees: nonNegativeMoneyValue(adjustment?.bank_fees_php ?? adjustment?.bankFeesPhp ?? 0),
     otherDeductions: nonNegativeMoneyValue(adjustment?.other_deductions_php ?? adjustment?.otherDeductionsPhp ?? 0),
+    otherDeductionItems: normalizeAdjustmentItems(adjustment?.other_deduction_items ?? adjustment?.otherDeductionItems),
     holidayPayOverride: adjustment?.holiday_pay_override ?? adjustment?.holidayPayOverride ?? null,
     cutoffPayOverride: adjustment?.cutoff_pay_override ?? adjustment?.cutoffPayOverride ?? null,
     grossPayOverride: adjustment?.gross_pay_override ?? adjustment?.grossPayOverride ?? null,
@@ -4679,6 +4689,147 @@ function adjustmentPageRows() {
   return PAYROLL_ROLES.flatMap(role => buildPayrollRows(role, range).map(row => ({ ...row, payrollRole: role })));
 }
 
+function normalizeAdjustmentItems(value) {
+  let items = value;
+  if (typeof items === 'string') {
+    try { items = JSON.parse(items); } catch { items = []; }
+  }
+  if (!Array.isArray(items)) return [];
+  return items.map(item => ({
+    amount: nonNegativeMoneyValue(item?.amount),
+    note: String(item?.note || '').trim().slice(0, 180)
+  })).filter(item => item.amount > 0 || item.note);
+}
+
+function adjustmentItemDraftKey(row, type) {
+  const { start, end } = adjustmentsRange();
+  return [row.employeeId || row.person.id, isoDate(start), isoDate(end), row.assignmentKey || 'primary', type].join('|');
+}
+
+function storedAdjustmentItems(row, type) {
+  const config = ITEMIZED_ADJUSTMENT_TYPES[type];
+  if (!config) return [];
+  const key = adjustmentItemDraftKey(row, type);
+  if (adjustmentItemDrafts.has(key)) return normalizeAdjustmentItems(adjustmentItemDrafts.get(key));
+  return normalizeAdjustmentItems(row[config.rowField] ?? row.record?.[config.dbField]);
+}
+
+function adjustmentItemTotal(items = []) {
+  return normalizeAdjustmentItems(items).reduce((sum, item) => sum + item.amount, 0);
+}
+
+function itemizedAdjustmentCell(row, index, type, fallbackTotal = 0) {
+  const config = ITEMIZED_ADJUSTMENT_TYPES[type];
+  const items = storedAdjustmentItems(row, type);
+  const total = items.length ? adjustmentItemTotal(items) : nonNegativeMoneyValue(fallbackTotal);
+  const detailLabel = items.length ? `${items.length} item${items.length === 1 ? '' : 's'}` : 'Add details';
+  return `<div class="itemized-adjustment-cell"><input type="hidden" data-adjust-field="${escapeHtml(config.totalField)}" value="${total.toFixed(2)}"><button type="button" class="itemized-adjustment-btn" data-edit-adjustment-items="${escapeHtml(type)}" data-adjustment-item-index="${index}"><b>${phpMoney(total)}</b><small>${detailLabel} · Click to edit</small></button></div>`;
+}
+
+function adjustmentItemsFromEditor({ validate = false } = {}) {
+  const lines = $$('#adjustmentItemLines .adjustment-item-line');
+  const items = [];
+  for (const line of lines) {
+    const amountInput = line.querySelector('[data-adjustment-item-amount]');
+    const noteInput = line.querySelector('[data-adjustment-item-note]');
+    const amountText = amountInput?.value.trim() || '';
+    const note = noteInput?.value.trim() || '';
+    if (!amountText && !note) continue;
+    const amount = Number(amountText);
+    if (validate && (!Number.isFinite(amount) || amount <= 0)) throw new Error('Each item needs an amount greater than zero.');
+    if (validate && !note) throw new Error('Add a note for every item so the payroll change has a clear audit trail.');
+    if (Number.isFinite(amount) && amount > 0) items.push({ amount: nonNegativeMoneyValue(amount), note: note.slice(0, 180) });
+  }
+  return items;
+}
+
+function adjustmentItemLineMarkup(item = {}, index = 0) {
+  const amount = Number(item.amount || 0);
+  return `<div class="adjustment-item-line" data-adjustment-item-line="${index}">
+    <label>Amount (PHP)<input type="number" min="0.01" step="0.01" data-adjustment-item-amount value="${amount > 0 ? amount.toFixed(2) : ''}" placeholder="0.00"></label>
+    <label>Notes<input type="text" maxlength="180" data-adjustment-item-note value="${escapeHtml(item.note || '')}" placeholder="Describe this payroll item"></label>
+    <button type="button" class="remove-adjustment-item" data-remove-adjustment-item aria-label="Remove this item">Remove</button>
+  </div>`;
+}
+
+function renderAdjustmentItemLines(items = []) {
+  const normalized = items.length ? items : [{ amount: 0, note: '' }];
+  $('#adjustmentItemLines').innerHTML = normalized.map(adjustmentItemLineMarkup).join('');
+  updateAdjustmentItemsTotal();
+}
+
+function updateAdjustmentItemsTotal() {
+  if (!$('#adjustmentItemsTotal')) return;
+  const total = $$('#adjustmentItemLines [data-adjustment-item-amount]').reduce((sum, input) => {
+    const amount = Number(input.value);
+    return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+  }, 0);
+  $('#adjustmentItemsTotal').textContent = phpMoney(total);
+}
+
+function openAdjustmentItemsEditor(index, type) {
+  const row = currentAdjustmentRows[Number(index)];
+  const config = ITEMIZED_ADJUSTMENT_TYPES[type];
+  if (!row || !config) return showToast('This payroll item could not be opened.');
+  let items = storedAdjustmentItems(row, type);
+  const fallback = type === 'deductions'
+    ? Math.abs(Number(row[config.totalField] || 0))
+    : nonNegativeMoneyValue(row[config.totalField]);
+  if (!items.length && fallback > 0) items = [{ amount: fallback, note: 'Existing amount' }];
+  editingAdjustmentItems = { index: Number(index), type, row, key: adjustmentItemDraftKey(row, type) };
+  $('#adjustmentItemsTitle').textContent = config.label;
+  $('#adjustmentItemsEmployee').textContent = `${row.person.name} · ${row.periodLabel || $('#adjustmentCenterRange')?.textContent || 'Selected cutoff'}`;
+  $('#adjustmentItemsError').hidden = true;
+  $('#adjustmentItemsError').textContent = '';
+  renderAdjustmentItemLines(items);
+  $('#adjustmentItemsBackdrop').hidden = false;
+  suppressHorizontalScrollControls();
+  setTimeout(() => $('#adjustmentItemLines input')?.focus(), 0);
+}
+
+function closeAdjustmentItemsEditor() {
+  $('#adjustmentItemsBackdrop').hidden = true;
+  editingAdjustmentItems = null;
+  queueHorizontalScrollControls();
+}
+
+function addAdjustmentItemEditorLine() {
+  const current = adjustmentItemsFromEditor();
+  current.push({ amount: 0, note: '' });
+  renderAdjustmentItemLines(current);
+  const lastLine = $('#adjustmentItemLines .adjustment-item-line:last-child');
+  lastLine?.querySelector('[data-adjustment-item-amount]')?.focus();
+}
+
+async function submitAdjustmentItems(event) {
+  event.preventDefault();
+  if (!editingAdjustmentItems) return;
+  const errorBox = $('#adjustmentItemsError');
+  let items;
+  try {
+    items = adjustmentItemsFromEditor({ validate: true });
+  } catch (error) {
+    errorBox.textContent = error.message;
+    errorBox.hidden = false;
+    return;
+  }
+  const { index, type, key } = editingAdjustmentItems;
+  const config = ITEMIZED_ADJUSTMENT_TYPES[type];
+  const container = document.querySelector(`[data-adjust-index="${index}"]`);
+  const totalInput = container?.querySelector(`[data-adjust-field="${config.totalField}"]`);
+  adjustmentItemDrafts.set(key, items);
+  if (totalInput) totalInput.value = adjustmentItemTotal(items).toFixed(2);
+  errorBox.hidden = true;
+  const saveButton = $('#adjustmentItemsSave');
+  const oldText = saveButton.textContent;
+  saveButton.disabled = true;
+  saveButton.textContent = 'Saving...';
+  const saved = await saveAdjustmentCenterRow(index);
+  saveButton.disabled = false;
+  saveButton.textContent = oldText;
+  if (saved) closeAdjustmentItemsEditor();
+}
+
 function adjustmentInput(value, field, step = '0.01') {
   return `<input class="adjustment-money-input" data-adjust-field="${field}" type="number" min="0" step="${step}" value="${Number(value || 0).toFixed(2)}">`;
 }
@@ -4704,13 +4855,13 @@ function renderAdjustmentCenter() {
       <span class="payroll-money">${phpMoney(row.grossPhp)}</span>
       <label>Holiday pay${adjustmentInput(row.holidayPayPhp, 'holidayPay')}</label>
       <label>Commission${adjustmentInput(row.commission, 'commission')}</label>
-      <label>Other earnings${adjustmentInput(row.otherEarnings, 'otherEarnings')}</label>
-      <label>Deductions${adjustmentInput(deductionValue, 'deductions')}</label>
+      ${itemizedAdjustmentCell(row, index, 'otherEarnings', row.otherEarnings)}
+      ${itemizedAdjustmentCell(row, index, 'deductions', deductionValue)}
       <label${statutoryLabel}>Pag-IBIG${adjustmentInput(row.statutoryPagibigPhp, 'pagibig')}</label>
       <label${statutoryLabel}>PhilHealth${adjustmentInput(row.statutoryPhilHealthPhp, 'philHealth')}</label>
       <label${statutoryLabel}>SSS${adjustmentInput(row.statutorySssPhp, 'sss')}</label>
       <label>Bank fees${adjustmentInput(row.bankFees, 'bankFees')}</label>
-      <label>Other deduction${adjustmentInput(row.otherDeductions, 'otherDeductions')}</label>
+      ${itemizedAdjustmentCell(row, index, 'otherDeductions', row.otherDeductions)}
       <b class="payroll-money">${phpMoney(row.netPay)}</b>
       <label class="adjustment-note-field">Notes<input data-adjust-field="note" value="${escapeHtml(row.note || '')}" maxlength="250" placeholder="Payroll note"></label>
       <button class="start-btn" type="button" data-save-adjustment-row="${index}">Save</button>
@@ -4734,7 +4885,10 @@ function adjustmentCenterValue(container, field, fallback = 0) {
 async function saveAdjustmentCenterRow(index) {
   const row = currentAdjustmentRows[Number(index)];
   const container = document.querySelector(`[data-adjust-index="${index}"]`);
-  if (!row || !container) return showToast('Adjustment row not found.');
+  if (!row || !container) {
+    showToast('Adjustment row not found.');
+    return false;
+  }
   const { start, end } = adjustmentsRange();
   const existing = row.record || {};
   const assignmentKey = row.assignmentKey || 'primary';
@@ -4752,11 +4906,14 @@ async function saveAdjustmentCenterRow(index) {
     commission_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'commission', row.commission)),
     holiday_pay_override: nonNegativeMoneyValue(adjustmentCenterValue(container, 'holidayPay', row.holidayPayPhp)),
     other_earnings_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'otherEarnings', row.otherEarnings)),
+    other_earnings_items: storedAdjustmentItems(row, 'otherEarnings'),
+    deduction_items: storedAdjustmentItems(row, 'deductions'),
     statutory_sss_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'sss', row.statutorySssPhp)),
     statutory_philhealth_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'philHealth', row.statutoryPhilHealthPhp)),
     statutory_pagibig_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'pagibig', row.statutoryPagibigPhp)),
     bank_fees_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'bankFees', row.bankFees)),
     other_deductions_php: nonNegativeMoneyValue(adjustmentCenterValue(container, 'otherDeductions', row.otherDeductions)),
+    other_deduction_items: storedAdjustmentItems(row, 'otherDeductions'),
     cutoff_pay_override: existing.cutoff_pay_override ?? existing.cutoffPayOverride ?? null,
     gross_pay_override: existing.gross_pay_override ?? existing.grossPayOverride ?? null,
     paystub_approved: false,
@@ -4775,13 +4932,17 @@ async function saveAdjustmentCenterRow(index) {
   if (usesSupabase()) {
     const { data, error } = await supabaseClient.from('payroll_adjustments').upsert(record, { onConflict: payrollAdjustmentConflictTarget() }).select().single();
     if (error) {
+      const needsItemSql = /other_earnings_items|deduction_items|other_deduction_items|schema cache/i.test(error.message || '');
       const needsNewSql = /holiday_pay_override|other_earnings_php|bank_fees_php|other_deductions_php|column/i.test(error.message || '');
-      showToast(`Could not save payroll additions/deductions: ${error.message}.${needsNewSql ? ' Run outputs/sync2time-additional-pay-deductions-sql.sql in Supabase first.' : ''}`);
+      const sqlHelp = needsItemSql
+        ? ' Run outputs/sync2time-itemized-payroll-adjustments-sql.sql in Supabase first.'
+        : needsNewSql ? ' Run outputs/sync2time-additional-pay-deductions-sql.sql in Supabase first.' : '';
+      showToast(`Could not save payroll additions/deductions: ${error.message}.${sqlHelp}`);
       if (button) {
         button.disabled = false;
         button.textContent = originalText;
       }
-      return;
+      return false;
     }
     payrollAdjustments = payrollAdjustments.filter(item => item.id !== data.id && !payrollAdjustmentMatches(item, data.employee_id, data.period_start, data.period_end, data.assignment_key || 'primary'));
     payrollAdjustments.push(data);
@@ -4796,17 +4957,22 @@ async function saveAdjustmentCenterRow(index) {
       assignmentKey: record.assignment_key,
       holidayPayOverride: record.holiday_pay_override,
       otherEarningsPhp: record.other_earnings_php,
+      otherEarningsItems: record.other_earnings_items,
+      deductionItems: record.deduction_items,
       bankFeesPhp: record.bank_fees_php,
-      otherDeductionsPhp: record.other_deductions_php
+      otherDeductionsPhp: record.other_deductions_php,
+      otherDeductionItems: record.other_deduction_items
     });
     persistPayrollAdjustments();
   }
+  Object.keys(ITEMIZED_ADJUSTMENT_TYPES).forEach(type => adjustmentItemDrafts.delete(adjustmentItemDraftKey(row, type)));
   renderAdjustmentCenter();
   renderPayroll();
   renderReports();
   renderEmployeePayrollAdjustments();
   renderQuickBooksPanel();
   showToast(`${row.person.name}'s additions/deductions were saved for this selected period.`);
+  return true;
 }
 
 function exportAdjustmentCenter() {
@@ -7595,9 +7761,26 @@ $('#reportDayEditHours').onchange = event => {
   $('#reportDayEditMinutes').disabled = fullDay;
   if (fullDay) $('#reportDayEditMinutes').value = '0';
 };
+$('#adjustmentItemsForm').onsubmit = submitAdjustmentItems;
+$('#adjustmentItemsClose').onclick = closeAdjustmentItemsEditor;
+$('#adjustmentItemsCancel').onclick = closeAdjustmentItemsEditor;
+$('#adjustmentItemsBackdrop').onclick = event => { if (event.target === event.currentTarget) closeAdjustmentItemsEditor(); };
+$('#addAdjustmentItemLine').onclick = addAdjustmentItemEditorLine;
+$('#adjustmentItemLines').oninput = updateAdjustmentItemsTotal;
+$('#adjustmentItemLines').onclick = event => {
+  const remove = event.target.closest('[data-remove-adjustment-item]');
+  if (!remove) return;
+  remove.closest('.adjustment-item-line')?.remove();
+  if (!$('#adjustmentItemLines .adjustment-item-line')) renderAdjustmentItemLines([]);
+  updateAdjustmentItemsTotal();
+};
 
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
+  if (!$('#adjustmentItemsBackdrop').hidden) {
+    closeAdjustmentItemsEditor();
+    return;
+  }
   if (!$('#reportDayEditBackdrop').hidden) {
     closeReportDayHoursEditor();
     return;
@@ -8514,6 +8697,12 @@ document.body.addEventListener('click', async event => {
   if (emailPaystub) {
     event.stopPropagation();
     openPaystubEmailEditor(emailPaystub.dataset.emailPaystub);
+    return;
+  }
+  const editAdjustmentItems = event.target.closest('[data-edit-adjustment-items]');
+  if (editAdjustmentItems) {
+    event.stopPropagation();
+    openAdjustmentItemsEditor(editAdjustmentItems.dataset.adjustmentItemIndex, editAdjustmentItems.dataset.editAdjustmentItems);
     return;
   }
   const saveAdjustmentRow = event.target.closest('[data-save-adjustment-row]');
