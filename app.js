@@ -3239,6 +3239,41 @@ function renderReportProjectOptions() {
   select.value = availableProjects.some(project => nameKey(project) === nameKey(selected)) ? availableProjects.find(project => nameKey(project) === nameKey(selected)) : 'All';
 }
 
+function employeeReportProjectFilter() {
+  return $('#employeeReportProject')?.value || 'All';
+}
+
+function renderEmployeeReportProjectOptions() {
+  const select = $('#employeeReportProject');
+  if (!select) return;
+  const selected = select.value || 'All';
+  const availableProjects = [...new Set([...taskOptions, 'Uncategorized'])];
+  select.innerHTML = '<option value="All">All projects</option>' +
+    availableProjects.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
+  select.value = availableProjects.some(project => nameKey(project) === nameKey(selected))
+    ? availableProjects.find(project => nameKey(project) === nameKey(selected))
+    : 'All';
+}
+
+function renderEmployeeProjectTotals(rows = []) {
+  const container = $('#employeeReportProjectTotals');
+  if (!container) return;
+  const totals = new Map();
+  rows.forEach(row => totals.set(row.project, (totals.get(row.project) || 0) + row.seconds));
+  const allSeconds = rows.reduce((sum, row) => sum + row.seconds, 0);
+  const selected = employeeReportProjectFilter();
+  const items = [
+    { value: 'All', label: 'All projects', seconds: allSeconds },
+    ...[...totals.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([label, seconds]) => ({ value: label, label, seconds }))
+  ];
+  container.innerHTML = items.map(item => {
+    const active = nameKey(item.value) === nameKey(selected);
+    return `<button type="button" class="employee-project-total${active ? ' active' : ''}" data-employee-report-project="${escapeHtml(item.value)}"><span>${escapeHtml(item.label)}</span><b>${formatDuration(item.seconds)}</b></button>`;
+  }).join('') || '<span class="empty-state">No project hours within this period.</span>';
+}
+
 function renderReportProjectTotals(records = []) {
   const container = $('#reportProjectTotals');
   if (!container) return;
@@ -3263,6 +3298,7 @@ function renderReportProjectTotals(records = []) {
 function renderProjectOptions() {
   $('#projectOptions').innerHTML = [`<button class="project-option ${selectedProject === 'All' ? 'active' : ''}" data-project="All"><i></i>All work</button>`, ...taskOptions.map(project => `<button class="project-option ${selectedProject === project ? 'active' : ''}" data-project="${escapeHtml(project)}"><i></i>${escapeHtml(project)}</button>`)].join('');
   renderReportProjectOptions();
+  renderEmployeeReportProjectOptions();
   const select = $('#employeeProject');
   if (select) select.innerHTML = taskOptions.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
   const taskSelect = $('#taskInput');
@@ -3976,7 +4012,10 @@ function buildDailyHoursSummary(employeeId, start, end, projectFilter = 'All') {
 function renderEmployeeHoursReport() {
   if (!$('#employeeReportRows') || currentAccount?.role !== 'employee' || !currentProfile?.id) return;
   const { start, end } = employeeReportRange();
-  const rows = buildDailyHoursSummary(currentProfile.id, start, end);
+  const allRows = buildDailyHoursSummary(currentProfile.id, start, end);
+  const projectFilter = employeeReportProjectFilter();
+  const rows = allRows.filter(row => projectFilter === 'All' || nameKey(row.project) === nameKey(projectFilter));
+  renderEmployeeProjectTotals(allRows);
   currentEmployeeReportRows = rows;
   $('#employeeReportTotalHours').textContent = formatDuration(rows.reduce((sum, row) => sum + row.seconds, 0));
   $('#employeeReportDayCount').textContent = new Set(rows.map(row => row.dateKey)).size;
@@ -3985,7 +4024,7 @@ function renderEmployeeHoursReport() {
     const details = [...new Set([...row.tasks.filter(task => nameKey(task) !== nameKey(row.project)), ...row.notes].filter(Boolean))].join(' · ');
     return `<div class="report-row employee-hours-row"><span>${escapeHtml(row.dateLabel)}</span><span>${row.entries}</span><span class="attendance-time">${formatDuration(row.seconds)}</span><span><b>${escapeHtml(row.project)}</b>${details ? `<small>${escapeHtml(details)}</small>` : ''}</span></div>`;
   }).join('') || '<div class="empty-state">No hours found for this period.</div>';
-  $('#employeeReportRangeLabel').textContent = `Showing ${businessDateLabel(start)} to ${businessDateLabel(end)}`;
+  $('#employeeReportRangeLabel').textContent = `Showing ${businessDateLabel(start)} to ${businessDateLabel(end)} · ${projectFilter === 'All' ? 'All projects' : projectFilter}`;
 }
 
 function payrollRange() {
@@ -6548,11 +6587,11 @@ function setActionButtonBusy(button, busyText = 'Working…') {
   };
 }
 
-async function offboardEmployeeAccess(identifier = '', email = '', name = '', actionButton = null) {
+async function offboardEmployeeAccess(identifier = '', email = '', name = '', actionButton = null, skipConfirmation = false) {
   const employee = employeeByIdentifier(identifier, email, name);
   if (!employee) return showToast('Employee record not found.');
   const confirmMessage = `Confirm employee offboarding for ${employee.name}?\n\nThis removes Sync2Time sign-in access while preserving attendance, payroll, and request history.`;
-  if (!confirm(confirmMessage)) return;
+  if (!skipConfirmation && !confirm(confirmMessage)) return;
   const releaseButton = setActionButtonBusy(actionButton, 'Offboarding…');
   if (releaseButton === null) return showToast('Offboarding is already processing. Please wait.');
   try {
@@ -6601,6 +6640,12 @@ async function deleteEmployeeAccess(identifier = '', email = '', name = '', acti
   if (typed !== 'DELETE') return showToast('Permanent delete cancelled.');
   const releaseButton = setActionButtonBusy(actionButton, 'Deleting…');
   if (releaseButton === null) return showToast('Employee delete is already processing. Please wait.');
+  let buttonReleased = false;
+  const releaseDeleteButton = () => {
+    if (buttonReleased || !releaseButton) return;
+    releaseButton();
+    buttonReleased = true;
+  };
   try {
     if (usesSupabase()) {
       await invokeEdgeFunction('admin-delete-employee', {
@@ -6632,9 +6677,19 @@ async function deleteEmployeeAccess(identifier = '', email = '', name = '', acti
     const message = isEdgeFunctionRequestFailure(error)
       ? edgeFunctionDeployMessage('admin-delete-employee')
       : (error.message || String(error));
+    if (/Permanent delete is blocked because this employee already has/i.test(message)) {
+      releaseDeleteButton();
+      const archiveInstead = confirm(`${employee.name} has attendance, payroll, or notification history that must remain connected to their records.\n\nSelect OK to remove their sign-in access and archive them from the active Team directory instead. Their historical reports will remain available.`);
+      if (archiveInstead) {
+        await offboardEmployeeAccess(employee.id, employee.email, employee.name, actionButton, true);
+      } else {
+        showToast(`Permanent deletion cancelled. ${employee.name}'s historical records were not changed.`);
+      }
+      return;
+    }
     showToast(`Delete employee error: ${message}`);
   } finally {
-    if (releaseButton) releaseButton();
+    releaseDeleteButton();
   }
 }
 
@@ -7579,6 +7634,13 @@ $('#reportPeriod').onchange = () => {
 };
 $('#employeeReportPeriod').onchange = () => {
   syncEmployeeReportDatesFromPeriod();
+  renderEmployeeHoursReport();
+};
+$('#employeeReportProject').onchange = renderEmployeeHoursReport;
+$('#employeeReportProjectTotals').onclick = event => {
+  const button = event.target.closest('[data-employee-report-project]');
+  if (!button) return;
+  $('#employeeReportProject').value = button.dataset.employeeReportProject;
   renderEmployeeHoursReport();
 };
 ['reportStart', 'reportEnd'].forEach(id => {

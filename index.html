@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260728-report-project-detail-8" />
+  <link rel="stylesheet" href="styles.css?v=20260801-employee-project-hours-9" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
@@ -313,9 +313,10 @@
 
     <section class="employee-hours-section employee-only" id="hours">
       <div class="section-title"><div><p class="eyebrow">MY HOURS REPORT</p><h2>Total hours worked</h2><p>Review your worked hours by day, week, month, or a custom date range.</p></div></div>
-      <div class="report-toolbar report-builder"><label class="filter-label">PERIOD <select id="employeeReportPeriod"><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option><option value="custom">Custom date</option></select></label><label class="filter-label">FROM <input id="employeeReportStart" type="date"></label><label class="filter-label">TO <input id="employeeReportEnd" type="date"></label></div>
+      <div class="report-toolbar report-builder"><label class="filter-label">PERIOD <select id="employeeReportPeriod"><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option><option value="custom">Custom date</option></select></label><label class="filter-label">FROM <input id="employeeReportStart" type="date"></label><label class="filter-label">TO <input id="employeeReportEnd" type="date"></label><label class="filter-label">PROJECT <select id="employeeReportProject"><option value="All">All projects</option></select></label></div>
       <div class="report-metrics"><article><span>TOTAL HOURS</span><b id="employeeReportTotalHours">0h 00m</b><small>Selected range</small></article><article><span>WORK DAYS</span><b id="employeeReportDayCount">0</b><small>Days with logged time</small></article><article><span>ENTRIES</span><b id="employeeReportEntryCount">0</b><small>Clock records</small></article></div>
-      <div class="attendance-card"><div class="report-table-head employee-hours-head"><span>DATE</span><span>ENTRIES</span><span>WORKED</span><span>DETAILS</span></div><div id="employeeReportRows"></div><div class="report-footer"><span id="employeeReportRangeLabel">Showing today's hours</span><span>Based on your approved logged time</span></div></div>
+      <div class="attendance-card"><div class="report-table-head employee-hours-head"><span>DATE</span><span>ENTRIES</span><span>WORKED</span><span>PROJECT / DETAILS</span></div><div id="employeeReportRows"></div><div class="report-footer"><span id="employeeReportRangeLabel">Showing today's hours</span><span>Based on your approved logged time</span></div></div>
+      <div class="employee-project-summary"><div><p class="eyebrow">PROJECT TOTALS</p><h3>Hours by project</h3><p>Click a project to filter the report above.</p></div><div class="employee-project-totals" id="employeeReportProjectTotals"></div></div>
     </section>
   </main>
 
@@ -421,6 +422,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260728-report-project-detail-8"></script>
+  <script src="app.js?v=20260801-employee-project-hours-9"></script>
 </body>
 </html>
