@@ -1877,6 +1877,7 @@ function attendanceRecordFromSupabase(entry, index) {
     dateKey: clockIn ? isoDate(clockIn) : '',
     clockIn: clockIn ? formatClock(clockIn) : '—',
     clockOut: clockOut ? formatClock(clockOut) : '—',
+    seconds,
     worked: formatDuration(seconds),
     status: entry.status === 'working' || !entry.clock_out ? 'clocked' : 'complete',
     liveSeconds: entry.status === 'working' || !entry.clock_out ? seconds : undefined
@@ -3179,8 +3180,8 @@ function buildProjectReportRows() {
     const dateKey = businessDateKey(entry.clock_in);
     if (dateKey < startKey || dateKey > endKey) return;
     const activity = parseLiveActivity(entry.task || '');
-    const project = projectNameForTimeEntry(entry);
-    if (!project || (selectedProject !== 'All' && nameKey(project) !== nameKey(selectedProject))) return;
+    const project = projectNameForTimeEntry(entry) || 'Uncategorized';
+    if (selectedProject !== 'All' && nameKey(project) !== nameKey(selectedProject)) return;
     const person = attendanceRecordFromSupabase(entry, index);
     if (!projectEmployeeMatches(person)) return;
     const employeeId = entry.employee_id || person.employeeId || person.email;
@@ -3298,9 +3299,9 @@ function renderReportProjectTotals(records = []) {
   records.forEach(record => {
     const configuredProject = taskOptions.find(project => nameKey(project) === nameKey(record.project));
     const project = configuredProject || record.project || 'Uncategorized';
-    totals.set(project, (totals.get(project) || 0) + durationSecondsFromLabel(record.worked));
+    totals.set(project, (totals.get(project) || 0) + recordDurationSeconds(record));
   });
-  const allSeconds = records.reduce((sum, record) => sum + durationSecondsFromLabel(record.worked), 0);
+  const allSeconds = records.reduce((sum, record) => sum + recordDurationSeconds(record), 0);
   const selected = reportProjectFilter();
   const items = [
     { value: 'All', label: 'All projects', seconds: allSeconds },
@@ -3313,7 +3314,8 @@ function renderReportProjectTotals(records = []) {
 }
 
 function renderProjectOptions() {
-  $('#projectOptions').innerHTML = [`<button class="project-option ${selectedProject === 'All' ? 'active' : ''}" data-project="All"><i></i>All work</button>`, ...taskOptions.map(project => `<button class="project-option ${selectedProject === project ? 'active' : ''}" data-project="${escapeHtml(project)}"><i></i>${escapeHtml(project)}</button>`)].join('');
+  const projectFilters = [...new Set([...taskOptions, 'Uncategorized'])];
+  $('#projectOptions').innerHTML = [`<button class="project-option ${selectedProject === 'All' ? 'active' : ''}" data-project="All"><i></i>All work</button>`, ...projectFilters.map(project => `<button class="project-option ${selectedProject === project ? 'active' : ''}" data-project="${escapeHtml(project)}"><i></i>${escapeHtml(project)}</button>`)].join('');
   renderReportProjectOptions();
   renderEmployeeReportProjectOptions();
   const select = $('#employeeProject');
@@ -3760,6 +3762,11 @@ function durationSecondsFromLabel(label) {
   return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 : 0;
 }
 
+function recordDurationSeconds(record = {}) {
+  const exactSeconds = Number(record.seconds);
+  return Number.isFinite(exactSeconds) ? Math.max(0, exactSeconds) : durationSecondsFromLabel(record.worked);
+}
+
 function currentCutoffKeys(reference = new Date(), previous = false) {
   let { year, month, day } = Object.fromEntries(Object.entries(businessParts(reference)).map(([key, value]) => [key, Number(value)]));
   if (previous) {
@@ -3880,11 +3887,12 @@ function renderReports() {
     const key = `${record.email}-${period === 'day' ? record.dateKey : 'range'}`;
     const existing = groups.get(key) || { ...record, entries: 0, seconds: 0, pay: 0 };
     existing.entries += 1;
-    existing.seconds += durationSecondsFromLabel(record.worked);
+    const entrySeconds = recordDurationSeconds(record);
+    existing.seconds += entrySeconds;
     const rate = hourlyRate(record);
     const entryDate = record.dateKey ? businessDateFromKey(record.dateKey) : businessDateFromKey(isoDate(todayDate));
     const multiplier = holidayForDate(entryDate)?.type === 'regular' ? 2 : 1;
-    existing.pay += rate === null ? 0 : rate * durationSecondsFromLabel(record.worked) / 3600 * multiplier;
+    existing.pay += rate === null ? 0 : rate * entrySeconds / 3600 * multiplier;
     groups.set(key, existing);
   });
   const rows = [...groups.values()].map(row => {
@@ -4039,7 +4047,7 @@ function buildDailyHoursSummary(employeeId, start, end, projectFilter = 'All') {
       entryIds: []
     };
     existing.entries += 1;
-    existing.seconds += durationSecondsFromLabel(record.worked);
+    existing.seconds += recordDurationSeconds(record);
     existing.tasks.push(record.task || 'Tracked time');
     if (record.note) existing.notes.push(record.note);
     if (record.id) existing.entryIds.push(record.id);
