@@ -128,7 +128,7 @@ const DEFAULT_PAYSTUB_EMAIL_TEMPLATES = [
 let paystubEmailTemplates = JSON.parse(localStorage.getItem('sync2time-paystub-email-templates') || 'null') || [...DEFAULT_PAYSTUB_EMAIL_TEMPLATES];
 let selectedPaystubEmailTemplateId = localStorage.getItem('sync2time-paystub-email-template-selected') || paystubEmailTemplates[0]?.id || '';
 const PAYSTUB_TEMPLATE_FIELDS = [
-  { key: 'employeeName', label: 'Employee name', group: 'Header' },
+  { key: 'employeeName', label: 'Team Member', group: 'Header' },
   { key: 'roleDepartment', label: 'Role and department', group: 'Header' },
   { key: 'payrollCutoff', label: 'Payroll cutoff', group: 'Header' },
   { key: 'payDate', label: 'Pay date', group: 'Header' },
@@ -163,11 +163,26 @@ const PAYSTUB_TEMPLATE_FIELDS = [
   { key: 'generatedAt', label: 'Generated date and confidentiality footer', group: 'Summary' }
 ];
 const DEFAULT_PAYSTUB_TEMPLATE_CONFIG = {
+  id: 'general-paystub',
+  name: 'General paystub',
+  department: 'all',
   title: 'SYNC2TIME PAYSTUB',
   companyName: 'Sync2VA Online Learning Corp.',
   fields: Object.fromEntries(PAYSTUB_TEMPLATE_FIELDS.map(field => [field.key, true]))
 };
-let paystubTemplateConfig = normalizePaystubTemplateConfig(JSON.parse(localStorage.getItem('sync2time-paystub-template-config') || 'null'));
+const PAYSTUB_TEMPLATE_DEPARTMENTS = [
+  { value: 'all', label: 'All employees / fallback' },
+  { value: 'coaches', label: 'Coaches' },
+  { value: 'admin', label: 'Admin' },
+  { value: 'webinar', label: 'Webinar' },
+  { value: 'smm', label: 'SMM' },
+  { value: 'other', label: 'Other' }
+];
+const legacyPaystubTemplateConfig = normalizePaystubTemplateConfig(JSON.parse(localStorage.getItem('sync2time-paystub-template-config') || 'null'));
+let paystubTemplateConfigs = normalizePaystubTemplateConfigs(JSON.parse(localStorage.getItem('sync2time-paystub-template-configs') || 'null'), legacyPaystubTemplateConfig);
+let selectedPaystubDesignTemplateId = localStorage.getItem('sync2time-paystub-design-template-selected') || paystubTemplateConfigs[0]?.id || '';
+let paystubGenerationTemplateId = localStorage.getItem('sync2time-paystub-generation-template-selected') || 'auto';
+let paystubTemplateConfig = paystubTemplateConfigs.find(template => template.id === selectedPaystubDesignTemplateId) || paystubTemplateConfigs[0];
 let emailingPayrollRow = null;
 let currentReportRows = [];
 let activeReportDetail = null;
@@ -2072,8 +2087,16 @@ async function loadSupabaseSettings() {
     paystubEmailTemplates = normalizePaystubEmailTemplates(sharedTemplates);
     localStorage.setItem('sync2time-paystub-email-templates', JSON.stringify(paystubEmailTemplates));
   }
-  if (sharedSettings.paystub_template_config) {
-    paystubTemplateConfig = normalizePaystubTemplateConfig(sharedSettings.paystub_template_config);
+  const sharedPaystubTemplates = sharedSettings.paystub_template_configs?.templates;
+  if (Array.isArray(sharedPaystubTemplates) && sharedPaystubTemplates.length) {
+    paystubTemplateConfigs = normalizePaystubTemplateConfigs(sharedPaystubTemplates, legacyPaystubTemplateConfig);
+    if (!paystubTemplateConfigs.some(template => template.id === selectedPaystubDesignTemplateId)) selectedPaystubDesignTemplateId = paystubTemplateConfigs[0].id;
+    paystubTemplateConfig = selectedPaystubDesignTemplate();
+    persistPaystubTemplateConfig();
+  } else if (sharedSettings.paystub_template_config) {
+    paystubTemplateConfigs = normalizePaystubTemplateConfigs(null, sharedSettings.paystub_template_config);
+    selectedPaystubDesignTemplateId = paystubTemplateConfigs[0].id;
+    paystubTemplateConfig = selectedPaystubDesignTemplate();
     persistPaystubTemplateConfig();
   }
   if (sharedSettings.quickbooks_payroll_mapping) {
@@ -4740,6 +4763,7 @@ function generalAdjustmentStack(row) {
 
 function renderPayroll() {
   if (!$('#payrollRows')) return;
+  renderPaystubGenerationPickers();
   const { start, end } = payrollRange();
   const fx = payrollUsdPhpRate();
   $('#payrollStart').value = isoDate(start);
@@ -4786,7 +4810,7 @@ function renderPayroll() {
   const recipientCount = currentPayrollRows.filter(row => paystubRecipients.some(item => item.employee_id === row.person.id)).length;
   const ready = currentPayrollRows.length > 0 && approvedCount === currentPayrollRows.length && recipientCount === currentPayrollRows.length;
   $('#bulkPaystubTitle').textContent = ready ? `Bulk ${selectedPayrollRole} paystubs are ready` : `Approve every ${selectedPayrollRole} paystub before bulk sending`;
-  $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · sends one paystub to each employee recipient from hr@sync2va.com`;
+  $('#bulkPaystubStatus').textContent = `${approvedCount} of ${currentPayrollRows.length} approved · ${recipientCount} recipients matched · PDF: ${selectedBulkPaystubTemplateLabel()} · sends one paystub to each employee recipient from hr@sync2va.com`;
   $('#sendPaystubs').disabled = !ready;
   $('#sendPaystubs').textContent = ready ? `Send all ${selectedPayrollRole} paystubs` : 'Approve all first';
   if ($('#sendEmployeeSamplePaystubs')) {
@@ -5280,7 +5304,7 @@ function renderSampleBulkEmailPreview() {
     return;
   }
   const { start, end } = payrollRange();
-  preview.textContent = `Bulk test will send ${rows.length} ${selectedPayrollRole} sample paystub${rows.length === 1 ? '' : 's'} for ${businessDateLabel(start)} to ${businessDateLabel(end)} to the test email below. It does not email employees and does not mark paystubs emailed.`;
+  preview.textContent = `Bulk test will send ${rows.length} ${selectedPayrollRole} sample paystub${rows.length === 1 ? '' : 's'} using “${selectedBulkPaystubTemplateLabel()}” for ${businessDateLabel(start)} to ${businessDateLabel(end)} to the test email below. It does not email employees and does not mark paystubs emailed.`;
   if (button) button.disabled = !usesSupabase();
   if (button) button.textContent = `Send ${rows.length} sample email${rows.length === 1 ? '' : 's'}`;
 }
@@ -5305,7 +5329,7 @@ async function sendSampleBulkEmail() {
       const row = rows[index];
       if (button) button.textContent = `Sending sample ${index + 1}/${rows.length}...`;
       try {
-        const pdf = await buildEmployeePaystub(row.person.id, false);
+        const pdf = await buildEmployeePaystub(row.person.id, false, $('#bulkPaystubTemplate')?.value || 'auto');
         if (!pdf?.base64) throw new Error('Could not create the sample paystub PDF');
         await invokeEdgeFunction('send-paystubs', {
           testMode: true,
@@ -5344,7 +5368,7 @@ async function sendEmployeeSamplePaystubs() {
   if (!rows.length) return showToast('No payroll rows are available for this tab.');
   const missing = rows.filter(row => !paystubRecipientForRow(row));
   if (missing.length) return showToast(`Add paystub email first for: ${missing.slice(0, 3).map(row => row.person.name).join(', ')}${missing.length > 3 ? '...' : ''}`);
-  if (!confirm(`Send TEST paystub emails to ${rows.length} ${selectedPayrollRole} employee recipient${rows.length === 1 ? '' : 's'} now? This will not mark paystubs emailed.`)) return;
+  if (!confirm(`Send TEST paystub emails to ${rows.length} ${selectedPayrollRole} employee recipient${rows.length === 1 ? '' : 's'} using “${selectedBulkPaystubTemplateLabel()}”? This will not mark paystubs emailed.`)) return;
   const button = $('#sendEmployeeSamplePaystubs');
   const originalText = button?.textContent || 'Send sample emails first';
   if (button) {
@@ -5357,7 +5381,7 @@ async function sendEmployeeSamplePaystubs() {
     const row = rows[index];
     if (button) button.textContent = `Sending sample ${index + 1}/${rows.length}...`;
     try {
-      const pdf = await buildEmployeePaystub(row.person.id, false);
+      const pdf = await buildEmployeePaystub(row.person.id, false, $('#bulkPaystubTemplate')?.value || 'auto');
       if (!pdf?.base64) throw new Error('Could not create the sample paystub PDF');
       await invokeEdgeFunction('send-paystubs', {
         testMode: true,
@@ -5416,20 +5440,112 @@ function compactPaystubLogoSource(image) {
 function normalizePaystubTemplateConfig(config) {
   const source = config && typeof config === 'object' ? config : {};
   const sourceFields = source.fields && typeof source.fields === 'object' ? source.fields : {};
+  const validDepartment = PAYSTUB_TEMPLATE_DEPARTMENTS.some(item => item.value === source.department) ? source.department : 'all';
   return {
+    id: String(source.id || `paystub-design-${Date.now()}`).trim(),
+    name: String(source.name || 'Paystub template').trim().slice(0, 80) || 'Paystub template',
+    department: validDepartment,
     title: String(source.title || DEFAULT_PAYSTUB_TEMPLATE_CONFIG.title).trim().slice(0, 70) || DEFAULT_PAYSTUB_TEMPLATE_CONFIG.title,
     companyName: String(source.companyName || DEFAULT_PAYSTUB_TEMPLATE_CONFIG.companyName).trim().slice(0, 100) || DEFAULT_PAYSTUB_TEMPLATE_CONFIG.companyName,
     fields: Object.fromEntries(PAYSTUB_TEMPLATE_FIELDS.map(field => [field.key, sourceFields[field.key] !== false]))
   };
 }
 
+function normalizePaystubTemplateConfigs(configs, legacyConfig = null) {
+  if (Array.isArray(configs) && configs.length) {
+    const unique = new Map();
+    configs.map(normalizePaystubTemplateConfig).forEach(template => {
+      if (!unique.has(template.id)) unique.set(template.id, template);
+    });
+    if (unique.size) return [...unique.values()];
+  }
+  const base = normalizePaystubTemplateConfig({
+    ...DEFAULT_PAYSTUB_TEMPLATE_CONFIG,
+    ...(legacyConfig || {}),
+    id: 'general-paystub',
+    name: 'General paystub',
+    department: 'all'
+  });
+  const coaches = normalizePaystubTemplateConfig({
+    ...base,
+    id: 'coaches-paystub',
+    name: 'Coaches paystub',
+    department: 'coaches',
+    fields: {
+      ...base.fields,
+      governmentDeductions: false,
+      pagibig: false,
+      philhealth: false,
+      sss: false
+    }
+  });
+  const admin = normalizePaystubTemplateConfig({
+    ...base,
+    id: 'admin-paystub',
+    name: 'Admin paystub',
+    department: 'admin'
+  });
+  return [coaches, admin, base];
+}
+
+function selectedPaystubDesignTemplate() {
+  return paystubTemplateConfigs.find(template => template.id === selectedPaystubDesignTemplateId) || paystubTemplateConfigs[0];
+}
+
+function paystubTemplateDepartmentLabel(value) {
+  return PAYSTUB_TEMPLATE_DEPARTMENTS.find(item => item.value === value)?.label || value;
+}
+
+function resolvePaystubTemplate(row, templateId = 'auto') {
+  if (templateId && templateId !== 'auto') {
+    const explicit = paystubTemplateConfigs.find(template => template.id === templateId);
+    if (explicit) return explicit;
+  }
+  const department = row?.payrollRole || payrollRole(row?.person || row);
+  return paystubTemplateConfigs.find(template => template.department === department)
+    || paystubTemplateConfigs.find(template => template.department === 'all')
+    || paystubTemplateConfigs[0]
+    || normalizePaystubTemplateConfig(DEFAULT_PAYSTUB_TEMPLATE_CONFIG);
+}
+
+function paystubGenerationOptions() {
+  return `<option value="auto">Automatic — use employee department template</option>${paystubTemplateConfigs.map(template => `<option value="${escapeHtml(template.id)}">${escapeHtml(template.name)} — ${escapeHtml(paystubTemplateDepartmentLabel(template.department))}</option>`).join('')}`;
+}
+
+function renderPaystubGenerationPickers() {
+  if (paystubGenerationTemplateId !== 'auto' && !paystubTemplateConfigs.some(template => template.id === paystubGenerationTemplateId)) paystubGenerationTemplateId = 'auto';
+  ['bulkPaystubTemplate', 'paystubPdfTemplate'].forEach(id => {
+    const select = $(`#${id}`);
+    if (!select) return;
+    const current = select.value || paystubGenerationTemplateId;
+    select.innerHTML = paystubGenerationOptions();
+    select.value = current === 'auto' || paystubTemplateConfigs.some(template => template.id === current) ? current : 'auto';
+  });
+}
+
+function selectedBulkPaystubTemplateLabel() {
+  const id = $('#bulkPaystubTemplate')?.value || paystubGenerationTemplateId || 'auto';
+  if (id === 'auto') {
+    const automatic = currentPayrollRows[0] ? resolvePaystubTemplate(currentPayrollRows[0], 'auto') : null;
+    return automatic ? `Automatic: ${automatic.name}` : 'Automatic by department';
+  }
+  return paystubTemplateConfigs.find(template => template.id === id)?.name || 'Automatic by department';
+}
+
 function persistPaystubTemplateConfig() {
   paystubTemplateConfig = normalizePaystubTemplateConfig(paystubTemplateConfig);
+  const index = paystubTemplateConfigs.findIndex(template => template.id === paystubTemplateConfig.id);
+  if (index >= 0) paystubTemplateConfigs[index] = paystubTemplateConfig;
+  else paystubTemplateConfigs.push(paystubTemplateConfig);
+  paystubTemplateConfigs = normalizePaystubTemplateConfigs(paystubTemplateConfigs, paystubTemplateConfig);
+  selectedPaystubDesignTemplateId = paystubTemplateConfig.id;
+  localStorage.setItem('sync2time-paystub-template-configs', JSON.stringify(paystubTemplateConfigs));
+  localStorage.setItem('sync2time-paystub-design-template-selected', selectedPaystubDesignTemplateId);
   localStorage.setItem('sync2time-paystub-template-config', JSON.stringify(paystubTemplateConfig));
 }
 
-function paystubFieldEnabled(key) {
-  return paystubTemplateConfig?.fields?.[key] !== false;
+function paystubFieldEnabled(key, config = paystubTemplateConfig) {
+  return config?.fields?.[key] !== false;
 }
 
 function paystubLineKey(label) {
@@ -5470,7 +5586,7 @@ function paystubLineKey(label) {
 
 function paystubPreviewValue(key) {
   const samples = {
-    employeeName: 'Employee name', roleDepartment: 'Role | Department', payrollCutoff: 'Jul 16, 2026 - Jul 31, 2026', payDate: 'Aug 5, 2026',
+    employeeName: 'Team Member name', roleDepartment: 'Role | Department', payrollCutoff: 'Jul 16, 2026 - Jul 31, 2026', payDate: 'Aug 5, 2026',
     actualHours: '30.00', payableHours: '30.00', scheduledWorkdays: '13', daysLogged: '13', absentWorkdays: '0', pendingWorkdays: '0',
     approvedOtHours: '0.00', rejectedExcessHours: '0.00', usdHourlyRate: 'USD 4.00', usdPhpRate: '61.2472', dailyRate: 'PHP 461.54',
     baseCutoffPay: 'PHP 6,000.00', attendancePay: 'PHP 6,000.00', otPay: 'PHP 0.00', grossPay: 'PHP 7,348.80', holidayPay: 'PHP 0.00',
@@ -5483,9 +5599,16 @@ function paystubPreviewValue(key) {
 
 function renderPaystubTemplate() {
   if (!$('#paystubTemplateFields')) return;
-  paystubTemplateConfig = normalizePaystubTemplateConfig(paystubTemplateConfig);
+  if (!paystubTemplateConfigs.some(template => template.id === selectedPaystubDesignTemplateId)) selectedPaystubDesignTemplateId = paystubTemplateConfigs[0]?.id || '';
+  paystubTemplateConfig = normalizePaystubTemplateConfig(selectedPaystubDesignTemplate() || DEFAULT_PAYSTUB_TEMPLATE_CONFIG);
+  $('#paystubDesignTemplateSelect').innerHTML = paystubTemplateConfigs.map(template => `<option value="${escapeHtml(template.id)}">${escapeHtml(template.name)} — ${escapeHtml(paystubTemplateDepartmentLabel(template.department))}</option>`).join('');
+  $('#paystubDesignTemplateSelect').value = paystubTemplateConfig.id;
+  $('#paystubTemplateName').value = paystubTemplateConfig.name;
+  $('#paystubTemplateDepartment').innerHTML = PAYSTUB_TEMPLATE_DEPARTMENTS.map(item => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join('');
+  $('#paystubTemplateDepartment').value = paystubTemplateConfig.department;
   $('#paystubTemplateTitle').value = paystubTemplateConfig.title;
   $('#paystubTemplateCompany').value = paystubTemplateConfig.companyName;
+  $('#deletePaystubDesignTemplate').disabled = paystubTemplateConfigs.length <= 1;
   const groups = [...new Set(PAYSTUB_TEMPLATE_FIELDS.map(field => field.group))];
   $('#paystubTemplateFields').innerHTML = groups.map(group => `
     <fieldset class="paystub-field-group">
@@ -5503,6 +5626,9 @@ function readPaystubTemplateForm() {
   const fields = { ...paystubTemplateConfig.fields };
   $$('[data-paystub-field]').forEach(input => { fields[input.dataset.paystubField] = input.checked; });
   return normalizePaystubTemplateConfig({
+    id: paystubTemplateConfig.id,
+    name: $('#paystubTemplateName')?.value,
+    department: $('#paystubTemplateDepartment')?.value,
     title: $('#paystubTemplateTitle')?.value,
     companyName: $('#paystubTemplateCompany')?.value,
     fields
@@ -5520,15 +5646,23 @@ function renderPaystubTemplatePreview() {
 }
 
 async function savePaystubTemplate() {
-  const previous = paystubTemplateConfig;
+  const previousTemplates = paystubTemplateConfigs.map(template => ({ ...template, fields: { ...template.fields } }));
   paystubTemplateConfig = readPaystubTemplateForm();
+  const departmentConflict = paystubTemplateConfig.department !== 'all'
+    ? paystubTemplateConfigs.find(template => template.id !== paystubTemplateConfig.id && template.department === paystubTemplateConfig.department)
+    : null;
+  if (departmentConflict) {
+    paystubTemplateConfig = selectedPaystubDesignTemplate();
+    return showToast(`${paystubTemplateDepartmentLabel(departmentConflict.department)} is already assigned to “${departmentConflict.name}”. Edit that template or choose another department.`);
+  }
   persistPaystubTemplateConfig();
   if (usesSupabase()) {
     try {
-      await saveSupabaseSetting('paystub_template_config', paystubTemplateConfig);
+      await saveSupabaseSetting('paystub_template_configs', { templates: paystubTemplateConfigs });
     } catch (error) {
       if (!isMissingAppSettingsError(error)) {
-        paystubTemplateConfig = previous;
+        paystubTemplateConfigs = previousTemplates;
+        paystubTemplateConfig = selectedPaystubDesignTemplate();
         persistPaystubTemplateConfig();
         renderPaystubTemplate();
         return showToast(`Paystub template sync error: ${error.message}`);
@@ -5538,19 +5672,72 @@ async function savePaystubTemplate() {
     }
   }
   renderPaystubTemplate();
-  showToast('Paystub template saved. Downloads and emails will use it now.');
+  renderPaystubGenerationPickers();
+  showToast(`${paystubTemplateConfig.name} saved for ${paystubTemplateDepartmentLabel(paystubTemplateConfig.department)}.`);
 }
 
 function resetPaystubTemplate() {
-  paystubTemplateConfig = normalizePaystubTemplateConfig(DEFAULT_PAYSTUB_TEMPLATE_CONFIG);
+  paystubTemplateConfig = normalizePaystubTemplateConfig({
+    ...DEFAULT_PAYSTUB_TEMPLATE_CONFIG,
+    id: paystubTemplateConfig.id,
+    name: paystubTemplateConfig.name,
+    department: paystubTemplateConfig.department
+  });
   renderPaystubTemplate();
   showToast('Default paystub items restored. Click Save template to keep them.');
 }
 
-async function buildEmployeePaystub(employeeId, shouldDownload = true) {
+function addPaystubDesignTemplate() {
+  const id = `paystub-design-${Date.now()}`;
+  const source = selectedPaystubDesignTemplate() || normalizePaystubTemplateConfig(DEFAULT_PAYSTUB_TEMPLATE_CONFIG);
+  paystubTemplateConfig = normalizePaystubTemplateConfig({
+    ...source,
+    id,
+    name: 'New department template',
+    department: 'all',
+    fields: { ...source.fields }
+  });
+  paystubTemplateConfigs.push(paystubTemplateConfig);
+  selectedPaystubDesignTemplateId = id;
+  persistPaystubTemplateConfig();
+  renderPaystubTemplate();
+  $('#paystubTemplateName').focus();
+  $('#paystubTemplateName').select();
+  showToast('New template created. Customize it, then click Save template.');
+}
+
+async function deletePaystubDesignTemplate() {
+  if (paystubTemplateConfigs.length <= 1) return showToast('Keep at least one paystub template.');
+  const template = selectedPaystubDesignTemplate();
+  if (!template || !confirm(`Delete the "${template.name}" paystub template?`)) return;
+  const previousTemplates = [...paystubTemplateConfigs];
+  paystubTemplateConfigs = paystubTemplateConfigs.filter(item => item.id !== template.id);
+  selectedPaystubDesignTemplateId = paystubTemplateConfigs[0].id;
+  paystubTemplateConfig = selectedPaystubDesignTemplate();
+  persistPaystubTemplateConfig();
+  if (usesSupabase()) {
+    try {
+      await saveSupabaseSetting('paystub_template_configs', { templates: paystubTemplateConfigs });
+    } catch (error) {
+      paystubTemplateConfigs = previousTemplates;
+      selectedPaystubDesignTemplateId = template.id;
+      paystubTemplateConfig = selectedPaystubDesignTemplate();
+      persistPaystubTemplateConfig();
+      renderPaystubTemplate();
+      return showToast(`Could not delete template: ${error.message}`);
+    }
+  }
+  renderPaystubTemplate();
+  renderPaystubGenerationPickers();
+  showToast('Paystub template deleted.');
+}
+
+async function buildEmployeePaystub(employeeId, shouldDownload = true, templateId = 'auto') {
   const row = currentPayrollRows.find(item => item.person.id === employeeId);
   if (!row) return showToast('Payroll row not found.');
   if (!window.jspdf?.jsPDF) return showToast('PDF library is still loading. Please try again.');
+  const pdfTemplate = resolvePaystubTemplate(row, templateId);
+  const rowPayrollRole = row.payrollRole || selectedPayrollRole;
   const { start, end, payDateKey } = payrollRange();
   const payDate = businessDateFromKey(payDateKey);
   const doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'a4' });
@@ -5570,14 +5757,14 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(24);
-  doc.text(paystubTemplateConfig.title, 145, 50);
+  doc.text(pdfTemplate.title, 145, 50);
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text(paystubTemplateConfig.companyName, 145, 72);
-  if (paystubFieldEnabled('payDate')) doc.text(`Pay date: ${businessDateLabel(payDate)}`, 145, 90);
+  doc.text(pdfTemplate.companyName, 145, 72);
+  if (paystubFieldEnabled('payDate', pdfTemplate)) doc.text(`Pay date: ${businessDateLabel(payDate)}`, 145, 90);
   doc.setTextColor(24, 35, 49);
   let identityY = 164;
-  if (paystubFieldEnabled('employeeName')) {
+  if (paystubFieldEnabled('employeeName', pdfTemplate)) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(16);
     doc.text(row.person.name, 38, identityY);
@@ -5585,15 +5772,15 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
   }
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  if (paystubFieldEnabled('roleDepartment')) {
+  if (paystubFieldEnabled('roleDepartment', pdfTemplate)) {
     doc.text(`${row.person.role} | ${row.person.department || 'Sync2VA'}`, 38, identityY);
     identityY += 17;
   }
-  if (paystubFieldEnabled('payrollCutoff')) doc.text(`Payroll cutoff: ${businessDateLabel(start)} - ${businessDateLabel(end)}`, 38, identityY);
+  if (paystubFieldEnabled('payrollCutoff', pdfTemplate)) doc.text(`Payroll cutoff: ${businessDateLabel(start)} - ${businessDateLabel(end)}`, 38, identityY);
   doc.setDrawColor(205, 216, 228);
   doc.line(38, 216, pageWidth - 38, 216);
   const lines = [];
-  if (selectedPayrollRole === 'coaches') {
+  if (rowPayrollRole === 'coaches') {
     lines.push(['Actual hours', row.actualHours.toFixed(2)]);
     lines.push(['Payable hours', row.payableHours.toFixed(2)]);
     lines.push(['Approved OT hours', row.otHours.toFixed(2)]);
@@ -5610,7 +5797,7 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['SSS', `PHP ${Number(row.statutorySssPhp || 0).toFixed(2)}`]);
     lines.push(['Bank fees', `PHP ${Number(row.bankFees || 0).toFixed(2)}`]);
     lines.push(['Other deduction', `PHP ${Number(row.otherDeductions || 0).toFixed(2)}`]);
-  } else if (selectedPayrollRole === 'admin') {
+  } else if (rowPayrollRole === 'admin') {
     lines.push(['Actual hours', row.actualHours.toFixed(2)]);
     lines.push(['Payable hours', row.payableHours.toFixed(2)]);
     lines.push(['Scheduled workdays', String(row.adminScheduledDays)]);
@@ -5652,7 +5839,7 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Other deduction', `PHP ${Number(row.otherDeductions || 0).toFixed(2)}`]);
     lines.push(['Commission', `PHP ${row.commission.toFixed(2)}`]);
   }
-  const visibleLines = lines.filter(([label]) => paystubFieldEnabled(paystubLineKey(label)));
+  const visibleLines = lines.filter(([label]) => paystubFieldEnabled(paystubLineKey(label), pdfTemplate));
   let y = 246;
   const lineStep = Math.max(17, Math.min(27, Math.floor(410 / Math.max(visibleLines.length, 1))));
   const lineHeight = lineStep - 2;
@@ -5670,7 +5857,7 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     doc.text(value, pageWidth - 50, y + 3, { align: 'right' });
     y += lineStep;
   });
-  if (paystubFieldEnabled('netPay')) {
+  if (paystubFieldEnabled('netPay', pdfTemplate)) {
     doc.setFillColor(10, 34, 61);
     doc.roundedRect(38, y + 8, pageWidth - 76, 68, 7, 7, 'F');
     doc.setTextColor(255, 255, 255);
@@ -5680,14 +5867,14 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     doc.text(`PHP ${row.netPay.toFixed(2)}`, pageWidth - 54, y + 43, { align: 'right' });
     y += 76;
   }
-  if (paystubFieldEnabled('notes')) {
+  if (paystubFieldEnabled('notes', pdfTemplate)) {
     doc.setTextColor(75, 84, 96);
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
     doc.text('Payroll notes:', 38, y + 28);
     doc.text(doc.splitTextToSize(row.note || 'No payroll notes for this cutoff.', pageWidth - 76), 38, y + 44);
   }
-  if (paystubFieldEnabled('generatedAt')) {
+  if (paystubFieldEnabled('generatedAt', pdfTemplate)) {
     doc.setTextColor(120, 129, 140);
     doc.setFontSize(8);
     doc.text(`Generated by Sync2Time on ${businessDateTimeLabel(new Date())}`, 38, 808);
@@ -5700,7 +5887,7 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     doc.save(filename);
     showToast(`${row.person.name}'s paystub downloaded.`);
   }
-  return { base64, filename, row };
+  return { base64, filename, row, template: pdfTemplate };
 }
 
 function normalizePaystubEmailTemplates(templates) {
@@ -5748,6 +5935,13 @@ function openPaystubEmailEditor(employeeId = '') {
   $('#paystubEmailEmployee').textContent = emailingPayrollRow ? `Email ${emailingPayrollRow.person.name}'s paystub` : 'Manage paystub email templates';
   $('#paystubEmailRecipient').value = recipient?.recipient_email || '';
   $('#paystubEmailRecipientLabel').hidden = !emailingPayrollRow;
+  renderPaystubGenerationPickers();
+  $('#paystubPdfTemplateLabel').hidden = !emailingPayrollRow;
+  if (emailingPayrollRow && $('#paystubPdfTemplate')) {
+    $('#paystubPdfTemplate').value = $('#bulkPaystubTemplate')?.value || paystubGenerationTemplateId || 'auto';
+    const automaticOption = $('#paystubPdfTemplate').querySelector('option[value="auto"]');
+    if (automaticOption) automaticOption.textContent = `Automatic — ${resolvePaystubTemplate(emailingPayrollRow, 'auto').name}`;
+  }
   $('#openPaystubGmail').hidden = !emailingPayrollRow;
   $('#paystubEmailCancel').textContent = emailingPayrollRow ? 'Cancel' : 'Done';
   renderPaystubEmailTemplatePicker();
@@ -5862,7 +6056,7 @@ async function openManualPaystubGmail(event) {
       gmailWindow.document.body.innerHTML = '<p style="font-family:sans-serif;padding:24px">Sync2Time could not save the email template. Please return to Sync2Time and check the error message.</p>';
       return;
     }
-    const result = await buildEmployeePaystub(row.person.id, true);
+    const result = await buildEmployeePaystub(row.person.id, true, $('#paystubPdfTemplate')?.value || 'auto');
     if (!result?.filename) {
       gmailWindow.document.body.innerHTML = '<p style="font-family:sans-serif;padding:24px">Sync2Time could not create the paystub PDF. Please return to Sync2Time and try again.</p>';
       return;
@@ -6640,7 +6834,7 @@ async function sendApprovedPaystubs() {
   if (!allReady || !approvedRows.length) return showToast('Approve every employee and assign every recipient first.');
   if (!rows.length) return showToast('All paystubs in this tab were already sent.');
   if (!usesSupabase()) return showToast('Supabase connection is required for secure email delivery.');
-  if (!confirm(`Send ${rows.length} ${selectedPayrollRole} paystubs now from hr@sync2va.com? Each PDF will only be sent to that employee's dedicated paystub email.`)) return;
+  if (!confirm(`Send ${rows.length} ${selectedPayrollRole} paystubs using “${selectedBulkPaystubTemplateLabel()}” now from hr@sync2va.com? Each PDF will only be sent to that employee's dedicated paystub email.`)) return;
   const button = $('#sendPaystubs');
   button.disabled = true;
   const original = button.textContent;
@@ -6650,7 +6844,7 @@ async function sendApprovedPaystubs() {
     const row = rows[index];
     button.textContent = `Sending ${index + 1}/${rows.length}…`;
     try {
-      const pdf = await buildEmployeePaystub(row.person.id, false);
+      const pdf = await buildEmployeePaystub(row.person.id, false, $('#bulkPaystubTemplate')?.value || 'auto');
       await invokeEdgeFunction('send-paystubs', {
         employeeId: row.person.id,
         assignmentKey: row.assignmentKey || 'primary',
@@ -8162,10 +8356,19 @@ $('#payrollTabs').onclick = event => {
 };
 $('#payrollCutoff').onchange = renderPayroll;
 if ($('#paystubTemplateFields')) $('#paystubTemplateFields').onchange = renderPaystubTemplatePreview;
-['paystubTemplateTitle', 'paystubTemplateCompany'].forEach(id => {
+['paystubTemplateName', 'paystubTemplateDepartment', 'paystubTemplateTitle', 'paystubTemplateCompany'].forEach(id => {
   const input = $(`#${id}`);
   if (input) input.oninput = renderPaystubTemplatePreview;
+  if (input) input.onchange = renderPaystubTemplatePreview;
 });
+if ($('#paystubDesignTemplateSelect')) $('#paystubDesignTemplateSelect').onchange = event => {
+  selectedPaystubDesignTemplateId = event.target.value;
+  localStorage.setItem('sync2time-paystub-design-template-selected', selectedPaystubDesignTemplateId);
+  paystubTemplateConfig = selectedPaystubDesignTemplate();
+  renderPaystubTemplate();
+};
+if ($('#newPaystubDesignTemplate')) $('#newPaystubDesignTemplate').onclick = addPaystubDesignTemplate;
+if ($('#deletePaystubDesignTemplate')) $('#deletePaystubDesignTemplate').onclick = deletePaystubDesignTemplate;
 if ($('#selectAllPaystubFields')) $('#selectAllPaystubFields').onclick = () => {
   $$('[data-paystub-field]').forEach(input => { input.checked = true; });
   renderPaystubTemplatePreview();
@@ -8176,6 +8379,11 @@ if ($('#clearPaystubFields')) $('#clearPaystubFields').onclick = () => {
 };
 if ($('#resetPaystubTemplate')) $('#resetPaystubTemplate').onclick = resetPaystubTemplate;
 if ($('#savePaystubTemplate')) $('#savePaystubTemplate').onclick = savePaystubTemplate;
+if ($('#bulkPaystubTemplate')) $('#bulkPaystubTemplate').onchange = event => {
+  paystubGenerationTemplateId = event.target.value || 'auto';
+  localStorage.setItem('sync2time-paystub-generation-template-selected', paystubGenerationTemplateId);
+  renderSampleBulkEmailPreview();
+};
 if ($('#adjustmentsPeriod')) {
   $('#adjustmentsPeriod').onchange = () => {
     syncAdjustmentsDatesFromPeriod();
