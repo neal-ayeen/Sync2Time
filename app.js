@@ -127,6 +127,47 @@ const DEFAULT_PAYSTUB_EMAIL_TEMPLATES = [
 ];
 let paystubEmailTemplates = JSON.parse(localStorage.getItem('sync2time-paystub-email-templates') || 'null') || [...DEFAULT_PAYSTUB_EMAIL_TEMPLATES];
 let selectedPaystubEmailTemplateId = localStorage.getItem('sync2time-paystub-email-template-selected') || paystubEmailTemplates[0]?.id || '';
+const PAYSTUB_TEMPLATE_FIELDS = [
+  { key: 'employeeName', label: 'Employee name', group: 'Header' },
+  { key: 'roleDepartment', label: 'Role and department', group: 'Header' },
+  { key: 'payrollCutoff', label: 'Payroll cutoff', group: 'Header' },
+  { key: 'payDate', label: 'Pay date', group: 'Header' },
+  { key: 'actualHours', label: 'Actual hours', group: 'Time' },
+  { key: 'payableHours', label: 'Payable hours', group: 'Time' },
+  { key: 'scheduledWorkdays', label: 'Scheduled workdays', group: 'Time' },
+  { key: 'daysLogged', label: 'Days with logged time', group: 'Time' },
+  { key: 'absentWorkdays', label: 'Absent workdays', group: 'Time' },
+  { key: 'pendingWorkdays', label: 'Pending workdays', group: 'Time' },
+  { key: 'approvedOtHours', label: 'Approved OT hours', group: 'Time' },
+  { key: 'rejectedExcessHours', label: 'Rejected excess hours', group: 'Time' },
+  { key: 'usdHourlyRate', label: 'USD hourly rate', group: 'Earnings' },
+  { key: 'usdPhpRate', label: 'USD to PHP rate', group: 'Earnings' },
+  { key: 'dailyRate', label: 'Daily rate', group: 'Earnings' },
+  { key: 'baseCutoffPay', label: 'Base cutoff pay', group: 'Earnings' },
+  { key: 'attendancePay', label: 'Attendance pay after absences', group: 'Earnings' },
+  { key: 'otPay', label: 'OT pay', group: 'Earnings' },
+  { key: 'grossPay', label: 'Gross pay', group: 'Earnings' },
+  { key: 'holidayPay', label: 'Holiday pay', group: 'Earnings' },
+  { key: 'adjustments', label: 'Adjustments', group: 'Earnings' },
+  { key: 'otherEarnings', label: 'Other earnings', group: 'Earnings' },
+  { key: 'commission', label: 'Commission', group: 'Earnings' },
+  { key: 'deductions', label: 'Deductions / manual deductions', group: 'Deductions' },
+  { key: 'governmentDeductions', label: 'Government deduction status', group: 'Deductions' },
+  { key: 'pagibig', label: 'Pag-IBIG', group: 'Deductions' },
+  { key: 'philhealth', label: 'PhilHealth', group: 'Deductions' },
+  { key: 'sss', label: 'SSS', group: 'Deductions' },
+  { key: 'bankFees', label: 'Bank fees', group: 'Deductions' },
+  { key: 'otherDeduction', label: 'Other deduction', group: 'Deductions' },
+  { key: 'netPay', label: 'Net pay', group: 'Summary' },
+  { key: 'notes', label: 'Payroll notes', group: 'Summary' },
+  { key: 'generatedAt', label: 'Generated date and confidentiality footer', group: 'Summary' }
+];
+const DEFAULT_PAYSTUB_TEMPLATE_CONFIG = {
+  title: 'SYNC2TIME PAYSTUB',
+  companyName: 'Sync2VA Online Learning Corp.',
+  fields: Object.fromEntries(PAYSTUB_TEMPLATE_FIELDS.map(field => [field.key, true]))
+};
+let paystubTemplateConfig = normalizePaystubTemplateConfig(JSON.parse(localStorage.getItem('sync2time-paystub-template-config') || 'null'));
 let emailingPayrollRow = null;
 let currentReportRows = [];
 let activeReportDetail = null;
@@ -2031,6 +2072,10 @@ async function loadSupabaseSettings() {
     paystubEmailTemplates = normalizePaystubEmailTemplates(sharedTemplates);
     localStorage.setItem('sync2time-paystub-email-templates', JSON.stringify(paystubEmailTemplates));
   }
+  if (sharedSettings.paystub_template_config) {
+    paystubTemplateConfig = normalizePaystubTemplateConfig(sharedSettings.paystub_template_config);
+    persistPaystubTemplateConfig();
+  }
   if (sharedSettings.quickbooks_payroll_mapping) {
     quickBooksMapping = normalizeQuickBooksMapping(sharedSettings.quickbooks_payroll_mapping);
     persistQuickBooksMapping();
@@ -2367,6 +2412,7 @@ function subscribeSupabaseRealtime() {
       renderPayroll();
       renderAdjustmentCenter();
       renderQuickBooksMappingPanel();
+      renderPaystubTemplate();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
       await loadSupabaseProfiles();
@@ -5367,6 +5413,140 @@ function compactPaystubLogoSource(image) {
   }
 }
 
+function normalizePaystubTemplateConfig(config) {
+  const source = config && typeof config === 'object' ? config : {};
+  const sourceFields = source.fields && typeof source.fields === 'object' ? source.fields : {};
+  return {
+    title: String(source.title || DEFAULT_PAYSTUB_TEMPLATE_CONFIG.title).trim().slice(0, 70) || DEFAULT_PAYSTUB_TEMPLATE_CONFIG.title,
+    companyName: String(source.companyName || DEFAULT_PAYSTUB_TEMPLATE_CONFIG.companyName).trim().slice(0, 100) || DEFAULT_PAYSTUB_TEMPLATE_CONFIG.companyName,
+    fields: Object.fromEntries(PAYSTUB_TEMPLATE_FIELDS.map(field => [field.key, sourceFields[field.key] !== false]))
+  };
+}
+
+function persistPaystubTemplateConfig() {
+  paystubTemplateConfig = normalizePaystubTemplateConfig(paystubTemplateConfig);
+  localStorage.setItem('sync2time-paystub-template-config', JSON.stringify(paystubTemplateConfig));
+}
+
+function paystubFieldEnabled(key) {
+  return paystubTemplateConfig?.fields?.[key] !== false;
+}
+
+function paystubLineKey(label) {
+  const keys = {
+    'Actual hours': 'actualHours',
+    'Payable hours': 'payableHours',
+    'Scheduled workdays': 'scheduledWorkdays',
+    'Days with logged time': 'daysLogged',
+    'Absent workdays': 'absentWorkdays',
+    'Pending workdays': 'pendingWorkdays',
+    'Approved OT hours': 'approvedOtHours',
+    'Rejected excess hours': 'rejectedExcessHours',
+    'USD hourly rate': 'usdHourlyRate',
+    'USD to PHP rate': 'usdPhpRate',
+    'Daily rate': 'dailyRate',
+    'Base cutoff pay': 'baseCutoffPay',
+    'Attendance pay after absences': 'attendancePay',
+    'OT pay': 'otPay',
+    'Gross pay': 'grossPay',
+    'Holiday pay': 'holidayPay',
+    'Adjustments': 'adjustments',
+    'Other earnings': 'otherEarnings',
+    'Commission': 'commission',
+    'Deductions': 'deductions',
+    'Manual deductions': 'deductions',
+    'Government deductions': 'governmentDeductions',
+    'Pag-IBIG': 'pagibig',
+    'Pag-IBIG employee share': 'pagibig',
+    'PhilHealth': 'philhealth',
+    'PhilHealth employee share': 'philhealth',
+    'SSS': 'sss',
+    'SSS employee share': 'sss',
+    'Bank fees': 'bankFees',
+    'Other deduction': 'otherDeduction'
+  };
+  return keys[label] || label;
+}
+
+function paystubPreviewValue(key) {
+  const samples = {
+    employeeName: 'Employee name', roleDepartment: 'Role | Department', payrollCutoff: 'Jul 16, 2026 - Jul 31, 2026', payDate: 'Aug 5, 2026',
+    actualHours: '30.00', payableHours: '30.00', scheduledWorkdays: '13', daysLogged: '13', absentWorkdays: '0', pendingWorkdays: '0',
+    approvedOtHours: '0.00', rejectedExcessHours: '0.00', usdHourlyRate: 'USD 4.00', usdPhpRate: '61.2472', dailyRate: 'PHP 461.54',
+    baseCutoffPay: 'PHP 6,000.00', attendancePay: 'PHP 6,000.00', otPay: 'PHP 0.00', grossPay: 'PHP 7,348.80', holidayPay: 'PHP 0.00',
+    adjustments: 'PHP 0.00', otherEarnings: 'PHP 0.00', commission: 'PHP 0.00', deductions: 'PHP 0.00', governmentDeductions: 'Charged this cutoff',
+    pagibig: 'PHP 200.00', philhealth: 'PHP 250.00', sss: 'PHP 625.00', bankFees: 'PHP 0.00', otherDeduction: 'PHP 0.00',
+    netPay: 'PHP 6,273.80', notes: 'Payroll notes entered by admin', generatedAt: 'Generated by Sync2Time | Confidential'
+  };
+  return samples[key] || 'Included';
+}
+
+function renderPaystubTemplate() {
+  if (!$('#paystubTemplateFields')) return;
+  paystubTemplateConfig = normalizePaystubTemplateConfig(paystubTemplateConfig);
+  $('#paystubTemplateTitle').value = paystubTemplateConfig.title;
+  $('#paystubTemplateCompany').value = paystubTemplateConfig.companyName;
+  const groups = [...new Set(PAYSTUB_TEMPLATE_FIELDS.map(field => field.group))];
+  $('#paystubTemplateFields').innerHTML = groups.map(group => `
+    <fieldset class="paystub-field-group">
+      <legend>${escapeHtml(group)}</legend>
+      ${PAYSTUB_TEMPLATE_FIELDS.filter(field => field.group === group).map(field => `
+        <label class="paystub-field-option">
+          <input type="checkbox" data-paystub-field="${escapeHtml(field.key)}" ${paystubFieldEnabled(field.key) ? 'checked' : ''}>
+          <span><b>${escapeHtml(field.label)}</b><small>${field.key === 'notes' ? 'Includes the saved payroll note on the PDF.' : 'Show this item on generated paystubs.'}</small></span>
+        </label>`).join('')}
+    </fieldset>`).join('');
+  renderPaystubTemplatePreview();
+}
+
+function readPaystubTemplateForm() {
+  const fields = { ...paystubTemplateConfig.fields };
+  $$('[data-paystub-field]').forEach(input => { fields[input.dataset.paystubField] = input.checked; });
+  return normalizePaystubTemplateConfig({
+    title: $('#paystubTemplateTitle')?.value,
+    companyName: $('#paystubTemplateCompany')?.value,
+    fields
+  });
+}
+
+function renderPaystubTemplatePreview() {
+  if (!$('#paystubTemplatePreview')) return;
+  const draft = readPaystubTemplateForm();
+  const visible = PAYSTUB_TEMPLATE_FIELDS.filter(field => draft.fields[field.key] !== false);
+  $('#paystubTemplatePreview').innerHTML = `
+    <div class="paystub-preview-header"><div class="paystub-preview-logo">S</div><div><b>${escapeHtml(draft.title)}</b><small>${escapeHtml(draft.companyName)}</small></div></div>
+    <div class="paystub-preview-lines">${visible.map(field => `<div class="${field.key === 'netPay' ? 'paystub-preview-net' : ''}"><span>${escapeHtml(field.label)}</span><b>${escapeHtml(paystubPreviewValue(field.key))}</b></div>`).join('') || '<p class="empty-state">No paystub items selected.</p>'}</div>`;
+  $('#paystubSelectedCount').textContent = `${visible.length} of ${PAYSTUB_TEMPLATE_FIELDS.length} items selected`;
+}
+
+async function savePaystubTemplate() {
+  const previous = paystubTemplateConfig;
+  paystubTemplateConfig = readPaystubTemplateForm();
+  persistPaystubTemplateConfig();
+  if (usesSupabase()) {
+    try {
+      await saveSupabaseSetting('paystub_template_config', paystubTemplateConfig);
+    } catch (error) {
+      if (!isMissingAppSettingsError(error)) {
+        paystubTemplateConfig = previous;
+        persistPaystubTemplateConfig();
+        renderPaystubTemplate();
+        return showToast(`Paystub template sync error: ${error.message}`);
+      }
+      showToast('Paystub template saved in this browser. The app_settings table is required to share it with other admins.');
+      return;
+    }
+  }
+  renderPaystubTemplate();
+  showToast('Paystub template saved. Downloads and emails will use it now.');
+}
+
+function resetPaystubTemplate() {
+  paystubTemplateConfig = normalizePaystubTemplateConfig(DEFAULT_PAYSTUB_TEMPLATE_CONFIG);
+  renderPaystubTemplate();
+  showToast('Default paystub items restored. Click Save template to keep them.');
+}
+
 async function buildEmployeePaystub(employeeId, shouldDownload = true) {
   const row = currentPayrollRows.find(item => item.person.id === employeeId);
   if (!row) return showToast('Payroll row not found.');
@@ -5390,19 +5570,26 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(24);
-  doc.text('SYNC2TIME PAYSTUB', 145, 50);
+  doc.text(paystubTemplateConfig.title, 145, 50);
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text('Sync2VA Online Learning Corp.', 145, 72);
-  doc.text(`Pay date: ${businessDateLabel(payDate)}`, 145, 90);
+  doc.text(paystubTemplateConfig.companyName, 145, 72);
+  if (paystubFieldEnabled('payDate')) doc.text(`Pay date: ${businessDateLabel(payDate)}`, 145, 90);
   doc.setTextColor(24, 35, 49);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.text(row.person.name, 38, 164);
+  let identityY = 164;
+  if (paystubFieldEnabled('employeeName')) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text(row.person.name, 38, identityY);
+    identityY += 18;
+  }
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text(`${row.person.role} | ${row.person.department || 'Sync2VA'}`, 38, 182);
-  doc.text(`Payroll cutoff: ${businessDateLabel(start)} - ${businessDateLabel(end)}`, 38, 199);
+  if (paystubFieldEnabled('roleDepartment')) {
+    doc.text(`${row.person.role} | ${row.person.department || 'Sync2VA'}`, 38, identityY);
+    identityY += 17;
+  }
+  if (paystubFieldEnabled('payrollCutoff')) doc.text(`Payroll cutoff: ${businessDateLabel(start)} - ${businessDateLabel(end)}`, 38, identityY);
   doc.setDrawColor(205, 216, 228);
   doc.line(38, 216, pageWidth - 38, 216);
   const lines = [];
@@ -5465,11 +5652,12 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     lines.push(['Other deduction', `PHP ${Number(row.otherDeductions || 0).toFixed(2)}`]);
     lines.push(['Commission', `PHP ${row.commission.toFixed(2)}`]);
   }
+  const visibleLines = lines.filter(([label]) => paystubFieldEnabled(paystubLineKey(label)));
   let y = 246;
-  const lineStep = lines.length > 18 ? 22 : 30;
+  const lineStep = Math.max(17, Math.min(27, Math.floor(410 / Math.max(visibleLines.length, 1))));
   const lineHeight = lineStep - 2;
   doc.setFontSize(10);
-  lines.forEach(([label, value], index) => {
+  visibleLines.forEach(([label, value], index) => {
     if (index % 2 === 0) {
       doc.setFillColor(246, 249, 252);
       doc.rect(38, y - 14, pageWidth - 76, lineHeight, 'F');
@@ -5482,24 +5670,29 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true) {
     doc.text(value, pageWidth - 50, y + 3, { align: 'right' });
     y += lineStep;
   });
-  doc.setFillColor(10, 34, 61);
-  doc.roundedRect(38, y + 8, pageWidth - 76, 68, 7, 7, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(11);
-  doc.text('NET PAY', 54, y + 35);
-  doc.setFontSize(22);
-  doc.text(`PHP ${row.netPay.toFixed(2)}`, pageWidth - 54, y + 43, { align: 'right' });
-  if (row.note) {
+  if (paystubFieldEnabled('netPay')) {
+    doc.setFillColor(10, 34, 61);
+    doc.roundedRect(38, y + 8, pageWidth - 76, 68, 7, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(11);
+    doc.text('NET PAY', 54, y + 35);
+    doc.setFontSize(22);
+    doc.text(`PHP ${row.netPay.toFixed(2)}`, pageWidth - 54, y + 43, { align: 'right' });
+    y += 76;
+  }
+  if (paystubFieldEnabled('notes')) {
     doc.setTextColor(75, 84, 96);
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
-    doc.text('Payroll notes:', 38, y + 104);
-    doc.text(doc.splitTextToSize(row.note, pageWidth - 76), 38, y + 120);
+    doc.text('Payroll notes:', 38, y + 28);
+    doc.text(doc.splitTextToSize(row.note || 'No payroll notes for this cutoff.', pageWidth - 76), 38, y + 44);
   }
-  doc.setTextColor(120, 129, 140);
-  doc.setFontSize(8);
-  doc.text(`Generated by Sync2Time on ${businessDateTimeLabel(new Date())}`, 38, 808);
-  doc.text('Confidential payroll document', pageWidth - 38, 808, { align: 'right' });
+  if (paystubFieldEnabled('generatedAt')) {
+    doc.setTextColor(120, 129, 140);
+    doc.setFontSize(8);
+    doc.text(`Generated by Sync2Time on ${businessDateTimeLabel(new Date())}`, 38, 808);
+    doc.text('Confidential payroll document', pageWidth - 38, 808, { align: 'right' });
+  }
   const assignmentSuffix = row.assignmentKey && row.assignmentKey !== 'primary' ? `-${slug(row.assignmentKey)}` : '';
   const filename = `Sync2Time-Paystub-${slug(row.person.name)}${assignmentSuffix}-${isoDate(start)}-to-${isoDate(end)}.pdf`;
   const base64 = doc.output('datauristring').split(',')[1];
@@ -7036,7 +7229,7 @@ function cardKeyAction(event, callback) {
 
 function showPage() {
   const page = (location.hash || '#today').slice(1);
-  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'integration', 'adjustments', 'team', 'approvals', 'ai-alerts', 'audit'];
+  const adminAllowed = ['today', 'attendance', 'projects', 'reports', 'payroll', 'paystub-template', 'integration', 'adjustments', 'team', 'approvals', 'ai-alerts', 'audit'];
   const employeeAllowed = ['today', 'hours', 'calendar', 'documents', 'requests'];
   const allowed = currentAccount?.role === 'employee' ? employeeAllowed : adminAllowed;
   const active = allowed.includes(page) ? page : 'today';
@@ -7046,6 +7239,7 @@ function showPage() {
   if (active === 'projects') renderProjects();
   if (active === 'reports') renderReports();
   if (active === 'payroll') renderPayroll();
+  if (active === 'paystub-template') renderPaystubTemplate();
   if (active === 'integration') renderQuickBooksPanel();
   if (active === 'adjustments') renderAdjustmentCenter();
   if (active === 'team') renderTeamDirectory();
@@ -7967,6 +8161,21 @@ $('#payrollTabs').onclick = event => {
   renderPayroll();
 };
 $('#payrollCutoff').onchange = renderPayroll;
+if ($('#paystubTemplateFields')) $('#paystubTemplateFields').onchange = renderPaystubTemplatePreview;
+['paystubTemplateTitle', 'paystubTemplateCompany'].forEach(id => {
+  const input = $(`#${id}`);
+  if (input) input.oninput = renderPaystubTemplatePreview;
+});
+if ($('#selectAllPaystubFields')) $('#selectAllPaystubFields').onclick = () => {
+  $$('[data-paystub-field]').forEach(input => { input.checked = true; });
+  renderPaystubTemplatePreview();
+};
+if ($('#clearPaystubFields')) $('#clearPaystubFields').onclick = () => {
+  $$('[data-paystub-field]').forEach(input => { input.checked = false; });
+  renderPaystubTemplatePreview();
+};
+if ($('#resetPaystubTemplate')) $('#resetPaystubTemplate').onclick = resetPaystubTemplate;
+if ($('#savePaystubTemplate')) $('#savePaystubTemplate').onclick = savePaystubTemplate;
 if ($('#adjustmentsPeriod')) {
   $('#adjustmentsPeriod').onchange = () => {
     syncAdjustmentsDatesFromPeriod();
