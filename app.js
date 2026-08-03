@@ -2,7 +2,8 @@
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 const palette = ['#e6aab1', '#bad7ed', '#f2d18a', '#c8d9b6', '#d8c1e8', '#f2b7a6', '#b9e2dc', '#e3d29d'];
-const DEFAULT_TASK_OPTIONS = ['Coaching', 'Meeting', 'On Class', 'Admin', 'Webinar', 'SMM', 'Bookkeeping'];
+const DEFAULT_TASK_OPTIONS = ['Coaching', 'Coach Admin', 'Meeting', 'On Class', 'Admin', 'Webinar', 'SMM', 'Bookkeeping'];
+const COACH_ONLY_TASK_OPTIONS = new Set(['coach admin']);
 let taskOptions = [...DEFAULT_TASK_OPTIONS];
 const BUSINESS_TIMEZONE = 'Asia/Manila';
 const BUSINESS_UTC_OFFSET = '+08:00';
@@ -3075,6 +3076,16 @@ function currentEmployeeJobRole() {
   return rosterSource().find(person => person.email?.toLowerCase() === email)?.role || '';
 }
 
+function currentEmployeeCanUseTask(task) {
+  if (currentAccount?.role !== 'employee') return true;
+  if (!COACH_ONLY_TASK_OPTIONS.has(nameKey(task))) return true;
+  return overtimeRoleName(currentEmployeeJobRole()) === 'Coach';
+}
+
+function taskOptionsForCurrentEmployee() {
+  return taskOptions.filter(task => currentEmployeeCanUseTask(task));
+}
+
 function longSessionPromptAppliesToCurrentEmployee() {
   return currentAccount?.role === 'employee' &&
     employeeEffectiveOvertimeRole(currentEmployeeJobRole(), currentEmployeeTaskValue()) === 'Coach';
@@ -3334,7 +3345,7 @@ function renderEmployeeReportProjectOptions() {
   const select = $('#employeeReportProject');
   if (!select) return;
   const selected = select.value || 'All';
-  const availableProjects = [...new Set([...taskOptions, 'Uncategorized'])];
+  const availableProjects = [...new Set([...taskOptionsForCurrentEmployee(), 'Uncategorized'])];
   select.innerHTML = '<option value="All">All projects</option>' +
     availableProjects.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
   select.value = availableProjects.some(project => nameKey(project) === nameKey(selected))
@@ -3391,9 +3402,10 @@ function renderProjectOptions() {
   if (select) select.innerHTML = taskOptions.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
   const taskSelect = $('#taskInput');
   if (taskSelect) {
+    const availableTasks = taskOptionsForCurrentEmployee();
     const selected = taskSelect.value || state.running?.task || '';
-    taskSelect.innerHTML = taskOptions.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
-    taskSelect.value = taskOptions.includes(selected) ? selected : (state.running?.task && !taskOptions.includes(state.running.task) ? taskOptions[0] : (selected || taskOptions[0]));
+    taskSelect.innerHTML = availableTasks.map(project => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`).join('');
+    taskSelect.value = availableTasks.includes(selected) ? selected : (availableTasks[0] || '');
   }
 }
 
@@ -7699,6 +7711,10 @@ $('#toggleTimer').onclick = async () => {
       return;
     } else {
       const task = $('#taskInput').value || 'Untitled task';
+      if (!currentEmployeeCanUseTask(task)) {
+        showToast('Coach Admin is available to coaches only.');
+        return;
+      }
       const note = $('#taskNoteInput')?.value?.trim() || '';
       const start = Date.now();
       timerActionLabel = 'Clocking in...';
@@ -7764,8 +7780,13 @@ $('#addTime').onclick = () => {
 };
 
 $('#taskInput').onchange = async () => {
-  if (!state.running) return;
   const nextTask = $('#taskInput').value || 'Untitled task';
+  if (!currentEmployeeCanUseTask(nextTask)) {
+    renderProjectOptions();
+    showToast('Coach Admin is available to coaches only.');
+    return;
+  }
+  if (!state.running) return;
   const previousRunning = { ...state.running };
   if (usesSupabase() && crossesDualAssignmentBoundary(previousRunning.task, nextTask)) {
     const switchAt = Date.now();
