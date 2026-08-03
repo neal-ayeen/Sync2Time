@@ -5596,6 +5596,79 @@ function paystubLineKey(label) {
   return keys[label] || label;
 }
 
+function paystubItemDescription(key, label = '', row = null) {
+  const descriptions = {
+    employeeName: 'Team member receiving this paystub',
+    roleDepartment: 'Assigned role and department',
+    payrollCutoff: 'Payroll period covered by this statement',
+    payDate: 'Scheduled payout date',
+    actualHours: 'Total clocked time recorded during this cutoff',
+    payableHours: 'Approved hours included in payroll',
+    scheduledWorkdays: 'Scheduled workday units within the cutoff',
+    daysLogged: 'Workdays with at least one recorded time entry',
+    absentWorkdays: 'Scheduled workdays without approved logged time',
+    pendingWorkdays: 'Workdays awaiting completion or review',
+    approvedOtHours: 'Overtime hours approved by an administrator',
+    rejectedExcessHours: 'Excess hours excluded from payroll',
+    usdHourlyRate: 'Approved hourly service rate in US dollars',
+    usdPhpRate: 'USD-to-PHP conversion rate used for this cutoff',
+    dailyRate: 'Calculated pay value for one full workday',
+    baseCutoffPay: 'Standard compensation before attendance adjustments',
+    attendancePay: 'Base pay after absence deductions',
+    otPay: 'Additional pay for approved overtime',
+    grossPay: 'Total earnings before adjustments and deductions',
+    holidayPay: 'Additional compensation for eligible Philippine holidays',
+    adjustments: row?.note || 'Manual payroll adjustment entered by HR',
+    otherEarnings: 'Additional approved earnings; item details appear below',
+    commission: 'Approved commission earned during this cutoff',
+    deductions: 'Manual payroll deductions; item details appear below',
+    governmentDeductions: 'Government contribution charging schedule for this cutoff',
+    pagibig: 'Employee Pag-IBIG contribution',
+    philhealth: 'Employee PhilHealth contribution',
+    sss: 'Employee SSS contribution',
+    bankFees: 'Bank or transfer fees charged for payout',
+    otherDeduction: 'Additional deductions; item details appear below',
+    netPay: 'Final amount payable after all additions and deductions',
+    notes: 'Payroll notes and supporting information',
+    generatedAt: 'Document generation and confidentiality information'
+  };
+  return descriptions[key] || `Payroll detail for ${String(label || key).toLowerCase()}`;
+}
+
+function detailedPaystubLines(lines, row) {
+  const itemizedByField = {
+    otherEarnings: normalizeAdjustmentItems(row?.otherEarningsItems),
+    deductions: normalizeAdjustmentItems(row?.deductionItems),
+    otherDeduction: normalizeAdjustmentItems(row?.otherDeductionItems)
+  };
+  const sublineLabels = {
+    otherEarnings: 'Earning',
+    deductions: 'Deduction',
+    otherDeduction: 'Other deduction'
+  };
+  return lines.flatMap(([label, value]) => {
+    const fieldKey = paystubLineKey(label);
+    const items = itemizedByField[fieldKey] || [];
+    const parent = {
+      label,
+      value,
+      fieldKey,
+      description: items.length
+        ? `${items.length} item${items.length === 1 ? '' : 's'} included; total shown at right`
+        : paystubItemDescription(fieldKey, label, row),
+      subline: false
+    };
+    const sublines = items.map((item, index) => ({
+      label: `- ${sublineLabels[fieldKey]} ${index + 1}`,
+      description: item.note || 'No description provided',
+      value: `PHP ${Number(item.amount || 0).toFixed(2)}`,
+      fieldKey,
+      subline: true
+    }));
+    return [parent, ...sublines];
+  });
+}
+
 function paystubPreviewValue(key) {
   const samples = {
     employeeName: 'Team Member name', roleDepartment: 'Role | Department', payrollCutoff: 'Jul 16, 2026 - Jul 31, 2026', payDate: 'Aug 5, 2026',
@@ -5653,7 +5726,10 @@ function renderPaystubTemplatePreview() {
   const visible = PAYSTUB_TEMPLATE_FIELDS.filter(field => draft.fields[field.key] !== false);
   $('#paystubTemplatePreview').innerHTML = `
     <div class="paystub-preview-header"><div class="paystub-preview-logo">S</div><div><b>${escapeHtml(draft.title)}</b><small>${escapeHtml(draft.companyName)}</small></div></div>
-    <div class="paystub-preview-lines">${visible.map(field => `<div class="${field.key === 'netPay' ? 'paystub-preview-net' : ''}"><span>${escapeHtml(field.label)}</span><b>${escapeHtml(paystubPreviewValue(field.key))}</b></div>`).join('') || '<p class="empty-state">No paystub items selected.</p>'}</div>`;
+    <div class="paystub-preview-lines">
+      <div class="paystub-preview-column-head"><span>SERVICE / ITEM</span><small>DESCRIPTION</small><b>AMOUNT / VALUE</b></div>
+      ${visible.map(field => `<div class="${field.key === 'netPay' ? 'paystub-preview-net' : ''}"><span>${escapeHtml(field.label)}</span><small>${escapeHtml(paystubItemDescription(field.key, field.label))}</small><b>${escapeHtml(paystubPreviewValue(field.key))}</b></div>`).join('') || '<p class="empty-state">No paystub items selected.</p>'}
+    </div>`;
   $('#paystubSelectedCount').textContent = `${visible.length} of ${PAYSTUB_TEMPLATE_FIELDS.length} items selected`;
 }
 
@@ -5851,24 +5927,64 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true, templateI
     lines.push(['Other deduction', `PHP ${Number(row.otherDeductions || 0).toFixed(2)}`]);
     lines.push(['Commission', `PHP ${row.commission.toFixed(2)}`]);
   }
-  const visibleLines = lines.filter(([label]) => paystubFieldEnabled(paystubLineKey(label), pdfTemplate));
-  let y = 246;
-  const lineStep = Math.max(17, Math.min(27, Math.floor(410 / Math.max(visibleLines.length, 1))));
-  const lineHeight = lineStep - 2;
-  doc.setFontSize(10);
-  visibleLines.forEach(([label, value], index) => {
+  const visibleLines = detailedPaystubLines(lines, row).filter(line => paystubFieldEnabled(line.fieldKey, pdfTemplate));
+  const itemX = 50;
+  const descriptionX = 205;
+  const valueX = pageWidth - 50;
+  const descriptionWidth = valueX - descriptionX - 92;
+  const drawColumnHeader = headerY => {
+    doc.setFillColor(18, 76, 126);
+    doc.rect(38, headerY, pageWidth - 76, 24, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text('SERVICE / ITEM', itemX, headerY + 16);
+    doc.text('DESCRIPTION', descriptionX, headerY + 16);
+    doc.text('AMOUNT / VALUE', valueX, headerY + 16, { align: 'right' });
+    return headerY + 30;
+  };
+  const addContinuationPage = (includeColumnHeader = true) => {
+    doc.addPage();
+    doc.setFillColor(10, 34, 61);
+    doc.rect(0, 0, pageWidth, 54, 'F');
+    doc.setFillColor(239, 119, 31);
+    doc.rect(0, 49, pageWidth, 5, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text(`${pdfTemplate.title} - CONTINUED`, 38, 31);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(`${row.person.name} | ${businessDateLabel(start)} - ${businessDateLabel(end)}`, pageWidth - 38, 31, { align: 'right' });
+    return includeColumnHeader ? drawColumnHeader(76) : 76;
+  };
+  let y = drawColumnHeader(230);
+  doc.setFontSize(9);
+  visibleLines.forEach((line, index) => {
+    const labelLines = doc.splitTextToSize(line.label || '', descriptionX - itemX - (line.subline ? 24 : 14));
+    const descriptionLines = doc.splitTextToSize(line.description || '', descriptionWidth);
+    const rowHeight = Math.max(24, Math.max(labelLines.length, descriptionLines.length) * 11 + 9);
+    if (y + rowHeight > 735) y = addContinuationPage();
     if (index % 2 === 0) {
-      doc.setFillColor(246, 249, 252);
-      doc.rect(38, y - 14, pageWidth - 76, lineHeight, 'F');
+      doc.setFillColor(line.subline ? 250 : 246, line.subline ? 251 : 249, line.subline ? 253 : 252);
+      doc.rect(38, y - 3, pageWidth - 76, rowHeight, 'F');
     }
+    doc.setTextColor(line.subline ? 69 : 45, line.subline ? 92 : 61, line.subline ? 115 : 79);
+    doc.setFont('helvetica', line.subline ? 'normal' : 'bold');
+    doc.setFontSize(line.subline ? 8.5 : 9);
+    doc.text(labelLines, itemX + (line.subline ? 10 : 0), y + 12);
     doc.setTextColor(91, 103, 118);
     doc.setFont('helvetica', 'normal');
-    doc.text(label, 50, y + 3);
+    doc.setFontSize(8.5);
+    doc.text(descriptionLines, descriptionX, y + 12);
     doc.setTextColor(24, 35, 49);
     doc.setFont('helvetica', 'bold');
-    doc.text(value, pageWidth - 50, y + 3, { align: 'right' });
-    y += lineStep;
+    doc.setFontSize(9);
+    doc.text(line.value, valueX, y + 12, { align: 'right' });
+    y += rowHeight;
   });
+  const closingSpace = (paystubFieldEnabled('netPay', pdfTemplate) ? 84 : 0) + (paystubFieldEnabled('notes', pdfTemplate) ? 72 : 0);
+  if (closingSpace && y + closingSpace > 770) y = addContinuationPage(false);
   if (paystubFieldEnabled('netPay', pdfTemplate)) {
     doc.setFillColor(10, 34, 61);
     doc.roundedRect(38, y + 8, pageWidth - 76, 68, 7, 7, 'F');
@@ -5880,17 +5996,23 @@ async function buildEmployeePaystub(employeeId, shouldDownload = true, templateI
     y += 76;
   }
   if (paystubFieldEnabled('notes', pdfTemplate)) {
+    const noteLines = doc.splitTextToSize(row.note || 'No payroll notes for this cutoff.', pageWidth - 76);
+    if (y + 48 + noteLines.length * 10 > 790) y = addContinuationPage(false);
     doc.setTextColor(75, 84, 96);
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
     doc.text('Payroll notes:', 38, y + 28);
-    doc.text(doc.splitTextToSize(row.note || 'No payroll notes for this cutoff.', pageWidth - 76), 38, y + 44);
+    doc.text(noteLines, 38, y + 44);
   }
   if (paystubFieldEnabled('generatedAt', pdfTemplate)) {
-    doc.setTextColor(120, 129, 140);
-    doc.setFontSize(8);
-    doc.text(`Generated by Sync2Time on ${businessDateTimeLabel(new Date())}`, 38, 808);
-    doc.text('Confidential payroll document', pageWidth - 38, 808, { align: 'right' });
+    const pageCount = doc.getNumberOfPages();
+    for (let page = 1; page <= pageCount; page += 1) {
+      doc.setPage(page);
+      doc.setTextColor(120, 129, 140);
+      doc.setFontSize(8);
+      doc.text(`Generated by Sync2Time on ${businessDateTimeLabel(new Date())}`, 38, 816);
+      doc.text(`Confidential payroll document | Page ${page} of ${pageCount}`, pageWidth - 38, 816, { align: 'right' });
+    }
   }
   const assignmentSuffix = row.assignmentKey && row.assignmentKey !== 'primary' ? `-${slug(row.assignmentKey)}` : '';
   const filename = `Sync2Time-Paystub-${slug(row.person.name)}${assignmentSuffix}-${isoDate(start)}-to-${isoDate(end)}.pdf`;
