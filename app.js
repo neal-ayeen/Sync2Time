@@ -4637,22 +4637,27 @@ function buildPayrollRows(role = selectedPayrollRole, rangeOverride = null) {
     const hourAdjustment = values.payableHoursOverride !== null
       ? payrollBaseHours - values.payableHoursOverride
       : values.deductedHours;
+    const payableHours = values.payableHoursOverride !== null
+      ? Math.max(0, values.payableHoursOverride)
+      : Math.max(0, payrollBaseHours - hourAdjustment);
     const hourDeductionPhp = role === 'admin' ? 0 : hourAdjustment * hourlyDeductionRatePhp;
     const amountDeductionPhp = role === 'coaches' || (!monthlyPhp && hourlyUsd) ? values.deductedAmount * fx : values.deductedAmount;
-    const quickDeductionPhp = hourDeductionPhp + amountDeductionPhp;
-    const payableHours = values.payableHoursOverride !== null ? Math.max(0, values.payableHoursOverride) : Math.max(0, payrollBaseHours - hourAdjustment);
+    // Payable hours already include every saved hour edit, so hourly gross pay
+    // must use that value. Only a separate amount deduction is subtracted later;
+    // subtracting hourDeductionPhp again would apply the same correction twice.
+    const quickDeductionPhp = amountDeductionPhp;
     const statutory = statutoryPayrollDeductions(person, values, start, end, role);
     let grossUsd = 0;
     let grossPhp = 0;
     if (role === 'coaches') {
-      grossUsd = payrollBaseHours * hourlyUsd;
+      grossUsd = payableHours * hourlyUsd;
       grossPhp = grossUsd * fx;
     } else if (role === 'admin') {
       grossPhp = adminAttendancePay + otPay;
     } else if (role === 'smm') {
       grossPhp = values.grossPayOverride === null ? cutoffPay : Number(values.grossPayOverride);
     } else if (role === 'other') {
-      grossPhp = monthlyPhp ? cutoffPay : payrollBaseHours * hourlyUsd * fx;
+      grossPhp = monthlyPhp ? cutoffPay : payableHours * hourlyUsd * fx;
     }
     const calculatedHolidayPayPhp = calculatedHolidayPay(person, role, entries, start, end, fx, hourlyUsd, monthlyPhp, adminDailyRate);
     const holidayPayPhp = values.holidayPayOverride === null || values.holidayPayOverride === undefined || values.holidayPayOverride === ''
@@ -8621,13 +8626,13 @@ $('#payrollExport').onclick = () => {
   let rows;
   if (selectedPayrollRole === 'coaches') {
     header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Hour Adjustment', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'USD Hourly Rate', 'PHP Rate', 'Gross USD Pay', 'Gross PHP Pay', 'Calculated Holiday Pay PHP', 'Holiday Pay Used PHP', 'Hour Adjustment PHP', 'Manual Adjustments PHP', 'Other Earnings PHP', 'Deductions PHP', 'Commission PHP', 'Pag-IBIG PHP', 'PhilHealth PHP', 'SSS PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.hourlyUsd.toFixed(2), payrollUsdPhpRate().toFixed(4), row.grossUsd.toFixed(2), row.grossPhp.toFixed(2), row.calculatedHolidayPayPhp.toFixed(2), row.holidayPayPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.otherEarnings.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutorySssPhp.toFixed(2), row.bankFees.toFixed(2), row.otherDeductions.toFixed(2), row.netPay.toFixed(2), row.note]);
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.hourlyUsd.toFixed(2), payrollUsdPhpRate().toFixed(4), row.grossUsd.toFixed(2), row.grossPhp.toFixed(2), row.calculatedHolidayPayPhp.toFixed(2), row.holidayPayPhp.toFixed(2), row.hourDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.otherEarnings.toFixed(2), row.deductions.toFixed(2), row.commission.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutorySssPhp.toFixed(2), row.bankFees.toFixed(2), row.otherDeductions.toFixed(2), row.netPay.toFixed(2), row.note]);
   } else if (selectedPayrollRole === 'admin') {
     header = ['Employee', 'Role', 'Expected Hours', 'Actual Hours', 'Payable Hours', 'Scheduled Workdays', 'Days With Logged Time', 'Absent Workdays', 'Pending Workdays', 'Daily Rate PHP', 'Base Cutoff Pay PHP', 'Attendance Pay PHP', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'OT Pay PHP', 'Gross Pay PHP', 'Calculated Holiday Pay PHP', 'Holiday Pay Used PHP', 'Hour Adjustment PHP', 'Manual Adjustments PHP', 'Other Earnings PHP', 'Manual Deductions PHP', 'SSS PHP', 'PhilHealth PHP', 'Pag-IBIG PHP', 'Total Government Deductions PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.adminScheduledDays, row.adminWorkedDays, row.adminAbsentDays, row.adminPendingDays, row.adminDailyRate.toFixed(2), row.cutoffPay.toFixed(2), row.adminAttendancePay.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.otPay.toFixed(2), row.grossPhp.toFixed(2), row.calculatedHolidayPayPhp.toFixed(2), row.holidayPayPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.otherEarnings.toFixed(2), row.deductions.toFixed(2), row.statutorySssPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryDeductionsPhp.toFixed(2), row.bankFees.toFixed(2), row.otherDeductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.expectedHours.toFixed(2), row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.adminScheduledDays, row.adminWorkedDays, row.adminAbsentDays, row.adminPendingDays, row.adminDailyRate.toFixed(2), row.cutoffPay.toFixed(2), row.adminAttendancePay.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.otPay.toFixed(2), row.grossPhp.toFixed(2), row.calculatedHolidayPayPhp.toFixed(2), row.holidayPayPhp.toFixed(2), row.hourDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.otherEarnings.toFixed(2), row.deductions.toFixed(2), row.statutorySssPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryDeductionsPhp.toFixed(2), row.bankFees.toFixed(2), row.otherDeductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
   } else {
     header = ['Employee', 'Role', 'Actual Hours', 'Payable Hours', 'Hour Adjustment', 'Approved OT Hours', 'Pending OT Hours', 'Rejected Excess Hours', 'Gross Pay PHP', 'Calculated Holiday Pay PHP', 'Holiday Pay Used PHP', 'Hour Adjustment PHP', 'Manual Adjustments PHP', 'Other Earnings PHP', 'Deductions PHP', 'Pag-IBIG PHP', 'PhilHealth PHP', 'SSS PHP', 'Bank Fees PHP', 'Other Deduction PHP', 'Commission PHP', 'Net Pay PHP', 'Notes'];
-    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.grossPhp.toFixed(2), row.calculatedHolidayPayPhp.toFixed(2), row.holidayPayPhp.toFixed(2), row.quickDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.otherEarnings.toFixed(2), row.deductions.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutorySssPhp.toFixed(2), row.bankFees.toFixed(2), row.otherDeductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
+    rows = currentPayrollRows.map(row => [row.person.name, row.person.role, row.actualHours.toFixed(2), row.payableHours.toFixed(2), row.deductedHours.toFixed(2), row.otHours.toFixed(2), row.pendingOtHours.toFixed(2), row.rejectedOtHours.toFixed(2), row.grossPhp.toFixed(2), row.calculatedHolidayPayPhp.toFixed(2), row.holidayPayPhp.toFixed(2), row.hourDeductionPhp.toFixed(2), row.adjustment.toFixed(2), row.otherEarnings.toFixed(2), row.deductions.toFixed(2), row.statutoryPagibigPhp.toFixed(2), row.statutoryPhilHealthPhp.toFixed(2), row.statutorySssPhp.toFixed(2), row.bankFees.toFixed(2), row.otherDeductions.toFixed(2), row.commission.toFixed(2), row.netPay.toFixed(2), row.note]);
   }
   const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
   exportCsv(`sync2time-${selectedPayrollRole}-payroll-${isoDate(start)}-to-${isoDate(end)}.csv`, csv, `${selectedPayrollRole} payroll exported.`);
