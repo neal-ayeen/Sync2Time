@@ -191,6 +191,8 @@ let currentPayrollRows = [];
 let currentAdjustmentRows = [];
 let currentEmployeeReportRows = [];
 let selectedPayrollRole = 'coaches';
+let paystubEmailSchedules = [];
+let paystubScheduleLoadError = '';
 const PAYROLL_ROLES = ['coaches', 'admin', 'webinar', 'smm', 'other'];
 const PAYROLL_ROLE_LABELS = { coaches: 'Coaches', admin: 'Admin', webinar: 'Webinar', smm: 'SMM', other: 'Other' };
 const MONTHLY_STATUTORY_CUTOFF_DAYS = { startDay: 1, endDay: 15, payDay: 20 };
@@ -2399,6 +2401,7 @@ async function refreshSupabaseData() {
   await loadRoleHourRules();
   await loadOvertimeAlerts();
   await loadPaystubRecipients();
+  await loadPaystubEmailSchedules(true);
   await loadSupabaseRequests();
   await repairApprovedTimeEdits();
   await loadSupabaseDocuments();
@@ -4837,6 +4840,7 @@ function renderPayroll() {
       : 'Send sample emails first';
   }
   renderSampleBulkEmailPreview();
+  renderPaystubScheduleControls();
   renderQuickBooksPanel();
   if (document.body.dataset.page === 'adjustments') renderAdjustmentCenter();
 }
@@ -5299,6 +5303,195 @@ function queueHorizontalScrollControls() {
   if (horizontalScrollQueued) return;
   horizontalScrollQueued = true;
   requestAnimationFrame(ensureHorizontalScrollControls);
+}
+
+function manilaDateTimeInputValue(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BUSINESS_TIMEZONE,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).formatToParts(date).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+function manilaInputToIso(value) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(value || ''))) return '';
+  const date = new Date(`${value}:00+08:00`);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+
+function formatManilaSchedule(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Invalid schedule';
+  return new Intl.DateTimeFormat('en-PH', {
+    timeZone: BUSINESS_TIMEZONE,
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true
+  }).format(date);
+}
+
+function defaultPaystubScheduleValue() {
+  const { payDateKey } = payrollRange();
+  const minimum = new Date(Date.now() + 15 * 60 * 1000);
+  const payDate = new Date(`${payDateKey}T09:00:00+08:00`);
+  return manilaDateTimeInputValue(payDate > minimum ? payDate : minimum);
+}
+
+function schedulesForCurrentPayrollView() {
+  const { start, end } = payrollRange();
+  const startKey = isoDate(start);
+  const endKey = isoDate(end);
+  return paystubEmailSchedules.filter(item =>
+    item.period_start === startKey &&
+    item.period_end === endKey &&
+    item.payroll_role === selectedPayrollRole
+  );
+}
+
+function renderPaystubScheduleControls() {
+  const card = $('.paystub-schedule-card');
+  const input = $('#paystubScheduleAt');
+  const scheduleButton = $('#schedulePaystubs');
+  const cancelButton = $('#cancelScheduledPaystubs');
+  const status = $('#paystubScheduleStatus');
+  if (!card || !input || !scheduleButton || !cancelButton || !status) return;
+
+  const { start, end } = payrollRange();
+  const rangeKey = `${isoDate(start)}:${isoDate(end)}:${selectedPayrollRole}`;
+  const rows = schedulesForCurrentPayrollView();
+  const active = rows.filter(item => ['pending', 'processing'].includes(item.status));
+  const failed = rows.filter(item => item.status === 'failed');
+  const approvedCount = currentPayrollRows.filter(row => row.paystubApproved).length;
+  const recipientCount = currentPayrollRows.filter(row => paystubRecipientForRow(row)).length;
+  const unsentRows = currentPayrollRows.filter(row => !row.paystubEmailedAt);
+  const ready = currentPayrollRows.length > 0 && approvedCount === currentPayrollRows.length && recipientCount === currentPayrollRows.length && unsentRows.length > 0;
+
+  card.classList.toggle('has-schedule', active.length > 0);
+  if (active.length) {
+    const first = active[0];
+    const templateNames = [...new Set(active.map(item => item.template_name).filter(Boolean))];
+    input.value = manilaDateTimeInputValue(new Date(first.scheduled_for));
+    input.disabled = true;
+    scheduleButton.disabled = true;
+    scheduleButton.textContent = 'Scheduled';
+    cancelButton.hidden = false;
+    cancelButton.disabled = active.some(item => item.status === 'processing');
+    status.textContent = `${active.length} ${selectedPayrollRole} paystub${active.length === 1 ? '' : 's'} scheduled for ${formatManilaSchedule(first.scheduled_for)} Philippine time. Locked PDF template${templateNames.length === 1 ? '' : 's'}: ${templateNames.join(', ') || 'automatic by department'}.`;
+    return;
+  }
+
+  input.disabled = false;
+  input.min = manilaDateTimeInputValue(new Date(Date.now() + 2 * 60 * 1000));
+  if (input.dataset.rangeKey !== rangeKey || !input.value) {
+    input.dataset.rangeKey = rangeKey;
+    input.value = defaultPaystubScheduleValue();
+  }
+  scheduleButton.disabled = !ready || !usesSupabase() || Boolean(paystubScheduleLoadError);
+  scheduleButton.textContent = ready ? `Schedule ${unsentRows.length} paystub${unsentRows.length === 1 ? '' : 's'}` : 'Approve all first';
+  cancelButton.hidden = true;
+  if (paystubScheduleLoadError) {
+    status.textContent = `Scheduling setup is not ready: ${paystubScheduleLoadError}`;
+  } else if (failed.length) {
+    status.textContent = `${failed.length} scheduled email${failed.length === 1 ? '' : 's'} failed. Review the Supabase function logs, then schedule again. ${failed[0].last_error || ''}`.trim();
+  } else if (!unsentRows.length && currentPayrollRows.length) {
+    status.textContent = 'Every paystub in this payroll tab has already been emailed.';
+  } else {
+    status.textContent = `Choose a Philippine date and time. Scheduling locks ${selectedBulkPaystubTemplateLabel()} into each employee's private PDF; cancel and reschedule if payroll or the template changes.`;
+  }
+}
+
+async function loadPaystubEmailSchedules(silent = true) {
+  if (!usesSupabase() || currentProfile?.role !== 'admin') {
+    paystubEmailSchedules = [];
+    paystubScheduleLoadError = '';
+    renderPaystubScheduleControls();
+    return;
+  }
+  const { start, end } = payrollRange();
+  try {
+    const result = await invokeEdgeFunction('send-paystubs', {
+      action: 'listSchedules',
+      periodStart: isoDate(start),
+      periodEnd: isoDate(end),
+      payrollRole: selectedPayrollRole
+    });
+    paystubEmailSchedules = result.schedules || [];
+    paystubScheduleLoadError = '';
+  } catch (error) {
+    paystubEmailSchedules = [];
+    paystubScheduleLoadError = error.message || 'Deploy the updated send-paystubs function and scheduling SQL.';
+    if (!silent) showToast(`Could not load scheduled paystubs: ${paystubScheduleLoadError}`);
+  }
+  renderPaystubScheduleControls();
+}
+
+async function scheduleApprovedPaystubs() {
+  if (!usesSupabase()) return showToast('Supabase connection is required for scheduled delivery.');
+  const rows = currentPayrollRows.filter(row => !row.paystubEmailedAt);
+  if (!rows.length) return showToast('There are no unsent paystubs in this payroll tab.');
+  const notReady = rows.filter(row => !row.paystubApproved || !paystubRecipientForRow(row));
+  if (notReady.length) return showToast('Approve every paystub and assign every recipient before scheduling.');
+  const scheduledFor = manilaInputToIso($('#paystubScheduleAt')?.value);
+  if (!scheduledFor) return showToast('Choose a valid Philippine send date and time.');
+  if (new Date(scheduledFor).getTime() < Date.now() + 60 * 1000) return showToast('Schedule the paystubs at least one minute in the future.');
+  const selectedTemplateId = $('#bulkPaystubTemplate')?.value || 'auto';
+  const templateLabel = selectedBulkPaystubTemplateLabel();
+  if (!confirm(`Schedule ${rows.length} ${selectedPayrollRole} paystub${rows.length === 1 ? '' : 's'} for ${formatManilaSchedule(scheduledFor)} Philippine time using “${templateLabel}”? The generated PDFs and resolved department templates will be locked now.`)) return;
+
+  const button = $('#schedulePaystubs');
+  const originalText = button.textContent;
+  const failures = [];
+  const { start, end } = payrollRange();
+  button.disabled = true;
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index];
+    button.textContent = `Scheduling ${index + 1}/${rows.length}…`;
+    try {
+      const resolvedTemplate = resolvePaystubTemplate(row, selectedTemplateId);
+      const pdf = await buildEmployeePaystub(row.person.id, false, selectedTemplateId);
+      if (!pdf?.base64) throw new Error('Could not create the locked paystub PDF');
+      await invokeEdgeFunction('send-paystubs', {
+        action: 'schedule',
+        employeeId: row.person.id,
+        assignmentKey: row.assignmentKey || 'primary',
+        payrollRole: selectedPayrollRole,
+        periodStart: isoDate(start),
+        periodEnd: isoDate(end),
+        scheduledFor,
+        templateId: resolvedTemplate.id,
+        templateName: resolvedTemplate.name,
+        filename: pdf.filename,
+        pdfBase64: pdf.base64
+      });
+    } catch (error) {
+      failures.push(`${row.person.name}: ${error.message || 'schedule failed'}`);
+    }
+  }
+  button.textContent = originalText;
+  await loadPaystubEmailSchedules(true);
+  if (failures.length) {
+    console.error('Scheduled paystub failures:', failures);
+    showToast(`${rows.length - failures.length} scheduled; ${failures.length} failed. First error: ${failures[0]}`);
+  } else {
+    showToast(`All ${rows.length} paystubs are scheduled for ${formatManilaSchedule(scheduledFor)} Philippine time.`);
+  }
+}
+
+async function cancelScheduledPaystubs() {
+  const active = schedulesForCurrentPayrollView().filter(item => item.status === 'pending');
+  if (!active.length) return showToast('There is no pending schedule to cancel.');
+  if (!confirm(`Cancel the scheduled delivery for ${active.length} ${selectedPayrollRole} paystub${active.length === 1 ? '' : 's'}? No employee email will be sent.`)) return;
+  const button = $('#cancelScheduledPaystubs');
+  button.disabled = true;
+  try {
+    await invokeEdgeFunction('send-paystubs', { action: 'cancelSchedules', scheduleIds: active.map(item => item.id) });
+    await loadPaystubEmailSchedules(true);
+    showToast('Scheduled paystub delivery cancelled. You can update payroll or the template and schedule again.');
+  } catch (error) {
+    showToast(`Could not cancel schedule: ${error.message || 'unknown error'}`);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function sampleBulkEmailRows() {
@@ -8500,9 +8693,15 @@ $('#payrollTabs').onclick = event => {
   const tab = event.target.closest('[data-payroll-role]');
   if (!tab) return;
   selectedPayrollRole = tab.dataset.payrollRole;
+  paystubEmailSchedules = [];
   renderPayroll();
+  loadPaystubEmailSchedules(true);
 };
-$('#payrollCutoff').onchange = renderPayroll;
+$('#payrollCutoff').onchange = () => {
+  paystubEmailSchedules = [];
+  renderPayroll();
+  loadPaystubEmailSchedules(true);
+};
 if ($('#paystubTemplateFields')) $('#paystubTemplateFields').onchange = renderPaystubTemplatePreview;
 ['paystubTemplateName', 'paystubTemplateDepartment', 'paystubTemplateTitle', 'paystubTemplateCompany'].forEach(id => {
   const input = $(`#${id}`);
@@ -8531,6 +8730,7 @@ if ($('#bulkPaystubTemplate')) $('#bulkPaystubTemplate').onchange = event => {
   paystubGenerationTemplateId = event.target.value || 'auto';
   localStorage.setItem('sync2time-paystub-generation-template-selected', paystubGenerationTemplateId);
   renderSampleBulkEmailPreview();
+  renderPaystubScheduleControls();
 };
 if ($('#adjustmentsPeriod')) {
   $('#adjustmentsPeriod').onchange = () => {
@@ -8653,6 +8853,8 @@ $('#aiAlertRefresh').onclick = async () => {
 $('#sendPaystubs').onclick = sendApprovedPaystubs;
 if ($('#sendEmployeeSamplePaystubs')) $('#sendEmployeeSamplePaystubs').onclick = sendEmployeeSamplePaystubs;
 if ($('#sendSampleBulkEmail')) $('#sendSampleBulkEmail').onclick = sendSampleBulkEmail;
+if ($('#schedulePaystubs')) $('#schedulePaystubs').onclick = scheduleApprovedPaystubs;
+if ($('#cancelScheduledPaystubs')) $('#cancelScheduledPaystubs').onclick = cancelScheduledPaystubs;
 if ($('#quickbooksRefresh')) $('#quickbooksRefresh').onclick = () => refreshQuickBooksStatus(true);
 if ($('#quickbooksConnect')) $('#quickbooksConnect').onclick = connectQuickBooks;
 if ($('#quickbooksSyncPayroll')) $('#quickbooksSyncPayroll').onclick = syncApprovedPayrollToQuickBooks;
@@ -9433,4 +9635,10 @@ document.body.addEventListener('click', async event => {
     renderAttendance();
     renderScheduleWatch();
   }, 1000);
+  setInterval(() => {
+    if (document.body.dataset.page === 'payroll' && usesSupabase() && currentProfile?.role === 'admin') {
+      loadPaystubEmailSchedules(true);
+      loadPayrollAdjustments().then(renderPayroll);
+    }
+  }, 60000);
 })();
