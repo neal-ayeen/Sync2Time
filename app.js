@@ -8418,9 +8418,11 @@ $('#coachingUpload').onchange = async event => {
 
 $('#loginForm').onsubmit = async event => {
   event.preventDefault();
+  const loginForm = event.currentTarget;
   const email = $('#loginEmail').value.trim().toLowerCase();
   const password = $('#loginPassword').value;
   const submitButton = event.submitter || $('#loginForm button[type="submit"]');
+  loginForm.classList.add('is-authenticating');
   if (submitButton) submitButton.disabled = true;
   setLoginMessage('Signing in… please wait.', false);
   try {
@@ -8457,9 +8459,19 @@ $('#loginForm').onsubmit = async event => {
   } catch (error) {
     setLoginMessage(error.message || 'Sign in failed. Please try again.');
   } finally {
+    loginForm.classList.remove('is-authenticating');
     if (submitButton) submitButton.disabled = false;
   }
 };
+
+const loginShell = $('#loginShell');
+if (loginShell) {
+  loginShell.addEventListener('pointermove', event => {
+    const bounds = loginShell.getBoundingClientRect();
+    loginShell.style.setProperty('--login-pointer-x', `${event.clientX - bounds.left}px`);
+    loginShell.style.setProperty('--login-pointer-y', `${event.clientY - bounds.top}px`);
+  }, { passive: true });
+}
 
 $('#profileButton').onclick = async () => {
   if (usesSupabase()) {

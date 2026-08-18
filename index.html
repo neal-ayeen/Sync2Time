@@ -7,20 +7,43 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260805-scheduled-paystubs-23" />
+  <link rel="stylesheet" href="styles.css?v=20260818-login-portal-24" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
+    <div class="login-portal" aria-hidden="true">
+      <div class="login-portal-halo"></div>
+      <svg class="login-fingerprint" viewBox="0 0 720 720" focusable="false">
+        <g class="login-fingerprint-blue">
+          <path d="M357 75c-157 0-285 128-285 285 0 107 42 205 111 278" />
+          <path d="M357 112c-137 0-248 111-248 248 0 92 34 177 91 242" />
+          <path d="M357 151c-115 0-209 94-209 209 0 78 27 149 73 205" />
+          <path d="M357 191c-93 0-169 76-169 169 0 63 20 121 55 169" />
+          <path d="M357 230c-72 0-130 58-130 130 0 50 14 95 40 133" />
+        </g>
+        <g class="login-fingerprint-orange">
+          <path d="M357 75c157 0 285 128 285 285 0 107-42 205-111 278" />
+          <path d="M357 112c137 0 248 111 248 248 0 92-34 177-91 242" />
+          <path d="M357 151c115 0 209 94 209 209 0 78-27 149-73 205" />
+          <path d="M357 191c93 0 169 76 169 169 0 63-20 121-55 169" />
+          <path d="M357 230c72 0 130 58 130 130 0 50-14 95-40 133" />
+        </g>
+        <path class="login-fingerprint-core" d="M357 270c-50 0-90 40-90 90 0 63 12 117 38 168M357 270c50 0 90 40 90 90 0 63-12 117-38 168M357 311c-27 0-49 22-49 49 0 73 17 130 49 184 32-54 49-111 49-184 0-27-22-49-49-49Z" />
+      </svg>
+      <div class="login-scan-beam"></div>
+      <div class="login-pointer-glow"></div>
+    </div>
     <form class="login-card" id="loginForm">
+      <div class="login-card-status"><span></span> SECURE WORKSPACE ACCESS</div>
       <a class="brand login-brand" href="#"><span class="brand-mark">S</span><span>Sync2Time</span></a>
       <p class="eyebrow">WELCOME BACK</p>
       <h1>Sign in to your workspace.</h1>
-      <p class="login-copy">Your view is selected automatically from your account.</p>
+      <p class="login-copy">Enter your credentials. Sync2Time will open the correct admin or employee workspace automatically.</p>
       <label>Work email<input id="loginEmail" type="email" autocomplete="email" placeholder="you@company.com" required></label>
       <label>Password<input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter your password" required></label>
       <p class="login-error" id="loginError" hidden></p>
       <button class="start-btn" type="submit">Sign in <span>→</span></button>
-      <p class="login-note">Admin and employee access are kept separate.</p>
+      <p class="login-note"><span></span> Protected access for Sync2VA team members</p>
     </form>
   </div>
 
@@ -474,6 +497,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260805-scheduled-paystubs-23"></script>
+  <script src="app.js?v=20260818-login-portal-24"></script>
 </body>
 </html>
