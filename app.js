@@ -4633,7 +4633,12 @@ function buildPayrollRows(role = selectedPayrollRole, rangeOverride = null) {
       ? adminAttendanceMetrics(entries, start, end)
       : { scheduledDays: 0, workedDays: 0, absentDays: 0, pendingDays: 0, paidDays: 0 };
     const adminDailyRate = role === 'admin' ? cutoffPay / Math.max(1, adminAttendance.scheduledDays) : 0;
-    const adminAttendancePay = role === 'admin' ? Math.max(0, cutoffPay - (adminAttendance.absentDays * adminDailyRate)) : 0;
+    const calculatedAdminAttendancePay = role === 'admin' ? Math.max(0, cutoffPay - (adminAttendance.absentDays * adminDailyRate)) : 0;
+    const adminAttendancePay = role === 'admin'
+      ? values.grossPayOverride === null
+        ? calculatedAdminAttendancePay
+        : Math.max(0, Number(values.grossPayOverride) || 0)
+      : 0;
     const dailyRate = role === 'admin' ? adminDailyRate : monthlyPhp / Math.max(1, weekdayCount(monthStart, monthEnd));
     const otPay = otHours * (dailyRate / 8) * 1.25;
     const hourlyDeductionRatePhp = monthlyPhp ? dailyRate / 8 : hourlyUsd * fx;
@@ -4668,7 +4673,7 @@ function buildPayrollRows(role = selectedPayrollRole, rangeOverride = null) {
       : Math.max(0, Number(values.holidayPayOverride) || 0);
     const calculatedNetPay = grossPhp + holidayPayPhp + values.adjustment + values.otherEarnings + values.deductions + values.commission - quickDeductionPhp - statutory.total - values.bankFees - values.otherDeductions;
     const netPay = Math.max(0, calculatedNetPay);
-    return { ...values, assignmentKey: payrollAssignmentKey(person), employeeId, payrollRole: role, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, adminScheduledDays: adminAttendance.scheduledDays, adminWorkedDays: adminAttendance.workedDays, adminAbsentDays: adminAttendance.absentDays, adminPendingDays: adminAttendance.pendingDays, adminPaidDays: adminAttendance.paidDays, adminDailyRate, adminAttendancePay, otPay, grossUsd, grossPhp, calculatedHolidayPayPhp, holidayPayPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total, statutoryAppliesThisCutoff: statutory.appliesThisCutoff, statutoryFallback: statutory.fallback };
+    return { ...values, assignmentKey: payrollAssignmentKey(person), employeeId, payrollRole: role, person, expectedHours, actualHours, payrollBaseHours, excludedAiHours, otHours, requestedOtHours, aiApprovedOtHours, pendingOtHours, rejectedOtHours, hourlyUsd, monthlyPhp, cutoffPay, adminScheduledDays: adminAttendance.scheduledDays, adminWorkedDays: adminAttendance.workedDays, adminAbsentDays: adminAttendance.absentDays, adminPendingDays: adminAttendance.pendingDays, adminPaidDays: adminAttendance.paidDays, adminDailyRate, calculatedAdminAttendancePay, adminAttendancePay, otPay, grossUsd, grossPhp, calculatedHolidayPayPhp, holidayPayPhp, netPay, payableHours, deductedHours: hourAdjustment, storedDeductedHours: dbDeductedHours(hourAdjustment), hourlyDeductionRatePhp, hourDeductionPhp, amountDeductionPhp, quickDeductionPhp, statutorySssPhp: statutory.sss, statutoryPhilHealthPhp: statutory.philHealth, statutoryPagibigPhp: statutory.pagibig, statutoryDeductionsPhp: statutory.total, statutoryAppliesThisCutoff: statutory.appliesThisCutoff, statutoryFallback: statutory.fallback };
   });
 }
 
@@ -4799,7 +4804,7 @@ function renderPayroll() {
   $$('#payrollTabs [data-payroll-role]').forEach(button => button.classList.toggle('active', button.dataset.payrollRole === selectedPayrollRole));
   const headers = {
     coaches: ['EMPLOYEE', 'EXPECTED HRS', 'ACTUAL HRS', 'OT HRS', 'USD RATE', 'PHP RATE', 'GROSS USD', 'GROSS PHP', 'ADJ / DED / COMM', 'NET PAY', 'ACTION'],
-    admin: ['EMPLOYEE', 'EXPECTED HRS', 'ACTUAL HRS', 'OT HRS', 'ATTENDANCE PAY', 'OT PAY', 'ADJ / DED + GOV', 'COMMISSION', 'NET PAY', 'ACTION'],
+    admin: ['EMPLOYEE', 'EXPECTED HRS', 'ACTUAL HRS', 'OT HRS', 'ATTENDANCE PAY (EDITABLE)', 'OT PAY', 'ADJ / DED + GOV', 'COMMISSION', 'NET PAY', 'ACTION'],
     webinar: ['EMPLOYEE', 'GROSS PAY', 'ADJ / DED', 'COMMISSION', 'NET PAY', 'ACTION'],
     smm: ['EMPLOYEE', 'GROSS PAY', 'ADJ / DED', 'COMMISSION', 'NET PAY', 'ACTION'],
     other: ['EMPLOYEE', 'GROSS PAY', 'ADJ / DED', 'COMMISSION', 'NET PAY', 'ACTION']
@@ -4813,7 +4818,7 @@ function renderPayroll() {
     const approvalLabel = row.paystubApproved ? 'Approved' : 'Approve';
     const edit = `<span class="payroll-actions"><button class="approve-paystub-btn ${row.paystubApproved ? 'approved' : ''}" data-approve-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="No paystub recipient"'}>${approvalLabel}</button><button class="quick-hours-btn" data-quick-hours="${row.person.id}">Hours</button><button class="edit-adjustment-btn" data-payroll-edit="${row.person.id}">Edit</button><button class="edit-adjustment-btn" data-payroll-recipient="${row.person.id}">Recipient</button><button class="paystub-btn" data-paystub="${row.person.id}">Paystub</button><button class="manual-email-btn" data-email-paystub="${row.person.id}" ${recipient ? '' : 'disabled title="Add a paystub recipient first"'}>Email</button></span>`;
     if (selectedPayrollRole === 'coaches') return `<div class="payroll-row coaches">${person}<span>${row.expectedHours.toFixed(2)}</span>${payrollHourChip(row)}<span>${row.otHours.toFixed(2)}</span><span>$${row.hourlyUsd.toFixed(2)}</span><span>₱${fx.toFixed(4)}</span><span class="payroll-money">$${row.grossUsd.toFixed(2)}</span><span class="payroll-money">${phpMoney(row.grossPhp)}</span>${coachAdjustmentStack(row)}<b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
-    if (selectedPayrollRole === 'admin') return `<div class="payroll-row admin">${person}<span>${row.expectedHours.toFixed(2)}</span>${payrollHourChip(row)}<span>${row.otHours.toFixed(2)}</span><span class="payroll-money payroll-adjustment-stack" title="Base cutoff pay ${phpMoney(row.cutoffPay)} divided by ${row.adminScheduledDays} workday units; Saturday counts as 0.5">${phpMoney(row.adminAttendancePay)}<small>${phpMoney(row.adminDailyRate)}/day · ${row.adminWorkedDays} worked · ${row.adminAbsentDays} absent${row.adminPendingDays ? ` · ${row.adminPendingDays} pending` : ''}</small></span><span class="payroll-money">${phpMoney(row.otPay)}</span>${adminDeductionsStack(row)}<span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
+    if (selectedPayrollRole === 'admin') return `<div class="payroll-row admin">${person}<span>${row.expectedHours.toFixed(2)}</span>${payrollHourChip(row)}<span>${row.otHours.toFixed(2)}</span><span class="payroll-money payroll-adjustment-stack admin-attendance-pay-editor" title="Type the correct Attendance Pay, then click Save"><span class="admin-attendance-pay-field"><b>₱</b><input type="number" min="0" step="0.01" value="${Number(row.adminAttendancePay || 0).toFixed(2)}" data-admin-attendance-pay-input="${row.person.id}" aria-label="Attendance Pay for ${escapeHtml(row.person.name)}"><button type="button" data-save-admin-attendance-pay="${row.person.id}">Save</button></span><small>${row.grossPayOverride === null ? 'Calculated' : 'Manual'} · ${phpMoney(row.adminDailyRate)}/day · ${row.adminWorkedDays} worked · ${row.adminAbsentDays} absent${row.adminPendingDays ? ` · ${row.adminPendingDays} pending` : ''}</small></span><span class="payroll-money">${phpMoney(row.otPay)}</span>${adminDeductionsStack(row)}<span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
     return `<div class="payroll-row ${selectedPayrollRole}">${person}<span class="payroll-money">${phpMoney(row.grossPhp)}</span>${generalAdjustmentStack(row)}<span class="payroll-money">${phpMoney(row.commission)}</span><b class="payroll-money">${phpMoney(row.netPay)}</b>${edit}</div>`;
   }).join('') || '<div class="empty-state">No employees are assigned to this role group.</div>';
   $('#payrollEmployeeCount').textContent = currentPayrollRows.length;
@@ -4824,7 +4829,7 @@ function renderPayroll() {
   $('#payrollNetPay').textContent = phpMoney(currentPayrollRows.reduce((sum, row) => sum + row.netPay, 0));
   $('#payrollRangeLabel').textContent = `${businessDateLabel(start)} to ${businessDateLabel(end)} · ${selectedPayrollRole.toUpperCase()}`;
   $('#payrollFooterHint').textContent = selectedPayrollRole === 'admin'
-    ? 'Admin pay is prorated by workday units: Monday-Friday counts as 1 day and Saturday counts as 0.5 day. A missed Saturday deducts half of the daily rate.'
+    ? 'Admin Attendance Pay is editable. Type the correct amount in the Attendance Pay column and click Save; Net Pay, reports, paystubs, and integrations update from that amount.'
     : 'Click Actual Hrs or Hours to adjust time quickly. Admin SSS, PhilHealth, and Pag-IBIG amounts are editable and charged only on the 1-15 cutoff paid on the 20th.';
   const approvedCount = currentPayrollRows.filter(row => row.paystubApproved).length;
   const recipientCount = currentPayrollRows.filter(row => paystubRecipients.some(item => item.employee_id === row.person.id)).length;
@@ -6535,7 +6540,12 @@ function openPayrollRowEditor(employeeId) {
   $('#payrollRowCutoffPay').value = row.cutoffPayOverride ?? '';
   $('#payrollRowCutoffPay').placeholder = `Calculated: ${row.cutoffPay.toFixed(2)}`;
   $('#payrollRowGrossPay').value = row.grossPayOverride ?? '';
-  $('#payrollRowGrossPay').placeholder = `Calculated: ${row.grossPhp.toFixed(2)}`;
+  $('#payrollRowGrossPay').placeholder = selectedPayrollRole === 'admin'
+    ? `Calculated Attendance Pay: ${row.calculatedAdminAttendancePay.toFixed(2)}`
+    : `Calculated: ${row.grossPhp.toFixed(2)}`;
+  if ($('#payrollGrossPayLabel')) $('#payrollGrossPayLabel').textContent = selectedPayrollRole === 'admin'
+    ? 'Attendance Pay override (PHP)'
+    : 'Gross Pay override (PHP)';
   const statutoryFields = $('#payrollStatutoryFields');
   const showStatutoryFields = selectedPayrollRole === 'admin';
   if (statutoryFields) statutoryFields.hidden = !showStatutoryFields;
@@ -6553,7 +6563,7 @@ function openPayrollRowEditor(employeeId) {
   }
   $('#payrollRowNote').value = row.note || '';
   $('#payrollCutoffPayField').hidden = selectedPayrollRole !== 'admin';
-  $('#payrollGrossPayField').hidden = selectedPayrollRole !== 'smm';
+  $('#payrollGrossPayField').hidden = !['admin', 'smm'].includes(selectedPayrollRole);
   $('#payrollAdjustmentField').hidden = false;
   $('#payrollDeductionField').hidden = false;
   $('#payrollCommissionField').hidden = false;
@@ -7112,6 +7122,89 @@ async function savePayrollRow(event) {
   renderPayroll();
   renderEmployeePayrollAdjustments();
   showToast('Payroll item and paystub destination saved.');
+}
+
+async function saveAdminAttendancePayOverride(employeeId, button) {
+  if (currentAccount?.role !== 'admin' || selectedPayrollRole !== 'admin') return;
+  const row = currentPayrollRows.find(item => item.person.id === employeeId);
+  const input = document.querySelector(`[data-admin-attendance-pay-input="${CSS.escape(employeeId)}"]`);
+  if (!row || !input) return showToast('Admin Attendance Pay row was not found.');
+  const rawValue = String(input.value || '').trim();
+  const attendancePayOverride = rawValue === '' ? null : Number(rawValue);
+  if (attendancePayOverride !== null && (!Number.isFinite(attendancePayOverride) || attendancePayOverride < 0)) {
+    input.focus();
+    return showToast('Enter a valid Attendance Pay amount of zero or more.');
+  }
+  const { start, end } = payrollRange();
+  const originalLabel = button?.textContent || 'Save';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Saving';
+  }
+  let result = { error: null };
+  if (usesSupabase()) {
+    const changes = {
+      gross_pay_override: attendancePayOverride,
+      paystub_approved: false,
+      approved_at: null,
+      approved_by: null,
+      paystub_emailed_at: null,
+      updated_at: new Date().toISOString()
+    };
+    if (row.record?.id) {
+      result = await supabaseClient.from('payroll_adjustments').update(changes).eq('id', row.record.id).select().single();
+    } else {
+      result = await supabaseClient.from('payroll_adjustments').upsert({
+        employee_id: row.employeeId || row.person.id,
+        period_start: isoDate(start),
+        period_end: isoDate(end),
+        assignment_key: row.assignmentKey || 'primary',
+        ...changes
+      }, { onConflict: payrollAdjustmentConflictTarget() }).select().single();
+    }
+    if (result.error) {
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+      return showToast(`Attendance Pay save error: ${result.error.message}`);
+    }
+    await loadPayrollAdjustments();
+  } else {
+    const existing = row.record || {};
+    const localRecord = {
+      ...existing,
+      id: existing.id || crypto.randomUUID(),
+      employeeId: row.employeeId || row.person.id,
+      employee_id: row.employeeId || row.person.id,
+      periodStart: isoDate(start),
+      period_start: isoDate(start),
+      periodEnd: isoDate(end),
+      period_end: isoDate(end),
+      assignmentKey: row.assignmentKey || 'primary',
+      assignment_key: row.assignmentKey || 'primary',
+      grossPayOverride: attendancePayOverride,
+      gross_pay_override: attendancePayOverride,
+      paystubApproved: false,
+      paystub_approved: false,
+      approvedAt: null,
+      approved_at: null,
+      approvedBy: null,
+      approved_by: null,
+      paystubEmailedAt: null,
+      paystub_emailed_at: null,
+      updatedAt: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    payrollAdjustments = payrollAdjustments.filter(item => !payrollAdjustmentMatches(item, localRecord.employee_id, localRecord.period_start, localRecord.period_end, localRecord.assignment_key));
+    payrollAdjustments.push(localRecord);
+    persistPayrollAdjustments();
+  }
+  renderPayroll();
+  renderReports();
+  renderEmployeePayrollAdjustments();
+  renderQuickBooksPanel();
+  showToast(`${row.person.name}'s Attendance Pay was saved as ${phpMoney(attendancePayOverride ?? row.calculatedAdminAttendancePay)}.`);
 }
 
 async function approvePayrollPaystub(employeeId) {
@@ -9572,6 +9665,12 @@ document.body.addEventListener('click', async event => {
   if (quickHours) {
     event.stopPropagation();
     openQuickHoursEditor(quickHours.dataset.quickHours);
+    return;
+  }
+  const saveAdminAttendancePay = event.target.closest('[data-save-admin-attendance-pay]');
+  if (saveAdminAttendancePay) {
+    event.stopPropagation();
+    await saveAdminAttendancePayOverride(saveAdminAttendancePay.dataset.saveAdminAttendancePay, saveAdminAttendancePay);
     return;
   }
   const payrollEdit = event.target.closest('[data-payroll-edit]');

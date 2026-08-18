@@ -296,3 +296,43 @@ main{max-width:none;width:auto;min-height:100vh}.team-section,.reports-section,.
 }
 @keyframes sync2vaGridDrift{to{background-position:56px 56px,56px 56px}}
 @media(prefers-reduced-motion:reduce){.login-shell,.login-shell::before{animation:none!important}}
+
+.admin-attendance-pay-editor{gap:6px!important}
+.admin-attendance-pay-field{display:grid;grid-template-columns:auto minmax(72px,1fr) auto;align-items:center;gap:4px;width:100%}
+.admin-attendance-pay-field>b{font:700 12px 'DM Mono',monospace;color:#183b5f}
+.admin-attendance-pay-field input{width:100%;min-width:0;border:1px solid #8eb9e2;border-radius:7px;padding:7px 6px;background:#f7fbff;color:#102f4e;font:700 11px 'DM Mono',monospace;outline:none}
+.admin-attendance-pay-field input:focus{border-color:#f28c28;box-shadow:0 0 0 3px rgba(242,140,40,.13)}
+.admin-attendance-pay-field button{border:1px solid #e6a267;border-radius:7px;padding:7px 6px;background:linear-gradient(180deg,#fff8f1,#ffead8);color:#98440f;font:800 9px 'DM Sans',sans-serif;cursor:pointer}
+.admin-attendance-pay-field button:disabled{opacity:.55;cursor:wait}
+/* Sliding icon rail copied from the supplied hover-menu reference */
+@media(min-width:851px){
+  .sidebar{width:76px;padding:24px 14px;overflow-x:hidden;overflow-y:auto;transition:width .3s ease,box-shadow .3s ease;z-index:60;scrollbar-width:none}
+  .sidebar::-webkit-scrollbar{width:0;height:0}
+  .sidebar:hover,.sidebar:focus-within{width:236px;box-shadow:14px 0 34px rgba(3,16,31,.28),inset -1px 0 0 rgba(255,255,255,.10)}
+  main{margin-left:76px;transition:margin-left .3s ease}
+  .sidebar .brand{height:34px;min-width:208px;padding:0 10px;margin-bottom:28px;gap:14px;white-space:nowrap}
+  .sidebar .brand-mark{flex:0 0 28px;width:28px;height:28px}
+  .sidebar .brand-label,.sidebar .nav-label,.sidebar .upgrade-label,.sidebar .profile-copy,.sidebar .profile i{opacity:0;visibility:hidden;max-width:0;white-space:nowrap;overflow:hidden;transform:translateX(-9px);transition:opacity .18s ease .02s,transform .25s ease,max-width .3s ease,visibility 0s linear .3s}
+  .sidebar:hover .brand-label,.sidebar:focus-within .brand-label,.sidebar:hover .nav-label,.sidebar:focus-within .nav-label,.sidebar:hover .upgrade-label,.sidebar:focus-within .upgrade-label,.sidebar:hover .profile-copy,.sidebar:focus-within .profile-copy,.sidebar:hover .profile i,.sidebar:focus-within .profile i{opacity:1;visibility:visible;max-width:170px;transform:translateX(0);transition:opacity .22s ease .09s,transform .28s ease .05s,max-width .3s ease,visibility 0s}
+  .sidebar nav{display:grid;gap:5px;min-width:208px}
+  .sidebar .nav-item{width:48px;min-height:40px;padding:5px 9px;gap:12px;border-radius:9px;white-space:nowrap;overflow:hidden;transition:width .3s ease,background .18s ease,color .18s ease,box-shadow .18s ease}
+  .sidebar:hover .nav-item,.sidebar:focus-within .nav-item{width:208px}
+  .sidebar .nav-item .nav-glyph{flex:0 0 30px;width:30px;height:30px;display:grid;place-items:center;border-radius:50%;color:#9fc3dd;background:linear-gradient(145deg,#173b5e,#0c2239);box-shadow:inset 1px 1px 1px rgba(255,255,255,.09),inset -2px -2px 5px rgba(0,0,0,.28),0 3px 7px rgba(0,0,0,.32);font-size:14px;text-align:center}
+  .sidebar .nav-item .nav-glyph-text{font-size:8px;font-weight:800;letter-spacing:-.25px}
+  .sidebar .nav-item .nav-label{width:auto;height:auto;text-align:left;font-size:14px}
+  .sidebar .nav-item.active{background:linear-gradient(135deg,#174c82,#235f9d 45%,#10263f)}
+  .sidebar .nav-item.active .nav-glyph{color:#fff;background:linear-gradient(145deg,#2b83d5,#154d83);box-shadow:inset 1px 1px 2px rgba(255,255,255,.26),0 4px 10px rgba(0,0,0,.34)}
+  .sidebar-bottom{min-width:208px}
+  .sidebar .upgrade{width:48px;min-height:38px;display:flex;align-items:center;gap:10px;padding:7px 10px;overflow:hidden;white-space:nowrap;transition:width .3s ease}
+  .sidebar:hover .upgrade,.sidebar:focus-within .upgrade{width:208px}
+  .sidebar .upgrade-glyph{flex:0 0 26px;width:26px;text-align:center;font-size:15px}
+  .sidebar .profile{width:48px;min-height:43px;padding:6px 8px;overflow:hidden;white-space:nowrap;transition:width .3s ease}
+  .sidebar:hover .profile,.sidebar:focus-within .profile{width:208px}
+  .sidebar .profile-copy{flex:0 0 auto}
+  .sidebar .profile i{margin-left:auto}
+}
+@media(prefers-reduced-motion:reduce){.sidebar,.sidebar .nav-item,.sidebar .brand-label,.sidebar .nav-label,.sidebar .upgrade,.sidebar .upgrade-label,.sidebar .profile,.sidebar .profile-copy,.sidebar .profile i,main{transition:none!important}}
+
+/* Authentication must always cover the application and its sliding sidebar. */
+#loginShell{z-index:1000}
+#loginShell:not([hidden])~.sidebar,#loginShell:not([hidden])~main{visibility:hidden;pointer-events:none}
