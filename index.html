@@ -7,43 +7,66 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260818-login-portal-24" />
+  <link rel="stylesheet" href="styles.css?v=20260818-sync2va-aurora-27" />
 </head>
 <body>
   <div class="login-shell" id="loginShell">
-    <div class="login-portal" aria-hidden="true">
-      <div class="login-portal-halo"></div>
-      <svg class="login-fingerprint" viewBox="0 0 720 720" focusable="false">
-        <g class="login-fingerprint-blue">
-          <path d="M357 75c-157 0-285 128-285 285 0 107 42 205 111 278" />
-          <path d="M357 112c-137 0-248 111-248 248 0 92 34 177 91 242" />
-          <path d="M357 151c-115 0-209 94-209 209 0 78 27 149 73 205" />
-          <path d="M357 191c-93 0-169 76-169 169 0 63 20 121 55 169" />
-          <path d="M357 230c-72 0-130 58-130 130 0 50 14 95 40 133" />
+    <button class="matrix-entry-dot" id="matrixEntryDot" type="button" aria-label="Open Sync2Time secure login">
+      <span class="matrix-entry-core"></span>
+      <span class="matrix-entry-ring"></span>
+      <small>INITIALIZE</small>
+    </button>
+    <div class="matrix-portal" aria-hidden="true">
+      <div class="matrix-vignette"></div>
+      <svg class="matrix-fingerprint" viewBox="0 0 760 760" focusable="false">
+        <defs>
+          <linearGradient id="matrixPrintGradient" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#b9d9ee" />
+            <stop offset=".48" stop-color="#f5fbff" />
+            <stop offset=".72" stop-color="#54aee6" />
+            <stop offset="1" stop-color="#ef8c3d" />
+          </linearGradient>
+        </defs>
+        <g class="matrix-print-lines">
+          <path d="M380 52C198 52 50 200 50 382c0 120 49 228 128 307" />
+          <path d="M380 52c182 0 330 148 330 330 0 120-49 228-128 307" />
+          <path d="M380 88C218 88 86 220 86 382c0 107 42 204 111 276" />
+          <path d="M380 88c162 0 294 132 294 294 0 107-42 204-111 276" />
+          <path d="M380 126c-141 0-256 115-256 256 0 93 35 178 94 243" />
+          <path d="M380 126c141 0 256 115 256 256 0 93-35 178-94 243" />
+          <path d="M380 165c-120 0-217 97-217 217 0 79 28 152 77 209" />
+          <path d="M380 165c120 0 217 97 217 217 0 79-28 152-77 209" />
+          <path d="M380 204c-98 0-178 80-178 178 0 66 22 126 60 176" />
+          <path d="M380 204c98 0 178 80 178 178 0 66-22 126-60 176" />
+          <path d="M380 245c-76 0-137 61-137 137 0 85 20 155 58 219" />
+          <path d="M380 245c76 0 137 61 137 137 0 85-20 155-58 219" />
+          <path d="M380 287c-52 0-95 43-95 95 0 101 29 180 95 265" />
+          <path d="M380 287c52 0 95 43 95 95 0 101-29 180-95 265" />
+          <path d="M380 327c-30 0-55 25-55 55 0 76 17 138 55 198 38-60 55-122 55-198 0-30-25-55-55-55Z" />
         </g>
-        <g class="login-fingerprint-orange">
-          <path d="M357 75c157 0 285 128 285 285 0 107-42 205-111 278" />
-          <path d="M357 112c137 0 248 111 248 248 0 92-34 177-91 242" />
-          <path d="M357 151c115 0 209 94 209 209 0 78-27 149-73 205" />
-          <path d="M357 191c93 0 169 76 169 169 0 63-20 121-55 169" />
-          <path d="M357 230c72 0 130 58 130 130 0 50-14 95-40 133" />
-        </g>
-        <path class="login-fingerprint-core" d="M357 270c-50 0-90 40-90 90 0 63 12 117 38 168M357 270c50 0 90 40 90 90 0 63-12 117-38 168M357 311c-27 0-49 22-49 49 0 73 17 130 49 184 32-54 49-111 49-184 0-27-22-49-49-49Z" />
       </svg>
-      <div class="login-scan-beam"></div>
-      <div class="login-pointer-glow"></div>
+      <div class="matrix-laser"></div>
+      <div class="matrix-cursor-aura"></div>
     </div>
     <form class="login-card" id="loginForm">
-      <div class="login-card-status"><span></span> SECURE WORKSPACE ACCESS</div>
-      <a class="brand login-brand" href="#"><span class="brand-mark">S</span><span>Sync2Time</span></a>
-      <p class="eyebrow">WELCOME BACK</p>
-      <h1>Sign in to your workspace.</h1>
-      <p class="login-copy">Enter your credentials. Sync2Time will open the correct admin or employee workspace automatically.</p>
-      <label>Work email<input id="loginEmail" type="email" autocomplete="email" placeholder="you@company.com" required></label>
-      <label>Password<input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter your password" required></label>
+      <div class="matrix-card-corners" aria-hidden="true"></div>
+      <div class="matrix-terminal-head">
+        <span class="brand-mark">S</span>
+        <div><small>SYNC2VA // SECURE ACCESS</small><h1>SYNC2TIME_PORTAL_AUTH</h1></div>
+        <i></i>
+      </div>
+      <label>TERMINAL USER HASH / WORK EMAIL<input id="loginEmail" type="email" autocomplete="email" placeholder="team.member@sync2va.com" required></label>
+      <label>QUANTUM PASS-TOKEN / PASSWORD<input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter secure pass-token" required></label>
       <p class="login-error" id="loginError" hidden></p>
-      <button class="start-btn" type="submit">Sign in <span>→</span></button>
-      <p class="login-note"><span></span> Protected access for Sync2VA team members</p>
+      <div class="matrix-actions">
+        <button class="matrix-disconnect" id="loginClear" type="reset">DISCONNECT</button>
+        <button class="start-btn matrix-verify" type="submit"><span class="matrix-button-label">VERIFY MATRIX</span><span class="matrix-button-arrow">›</span></button>
+      </div>
+      <div class="matrix-auth-status">
+        <svg viewBox="0 0 36 36" aria-hidden="true"><circle class="matrix-progress-track" cx="18" cy="18" r="14"></circle><circle class="matrix-progress-value" cx="18" cy="18" r="14"></circle><path d="M18 11c-4 0-7 3-7 7 0 4 1 7 3 10M18 11c4 0 7 3 7 7 0 4-1 7-3 10M18 15c-2 0-3 1-3 3 0 4 1 7 3 10 2-3 3-6 3-10 0-2-1-3-3-3Z"></path></svg>
+        <span id="loginStatusLabel">READY FOR IDENTITY VERIFICATION</span>
+        <b>ENCRYPTED</b>
+      </div>
     </form>
   </div>
 
@@ -497,6 +520,6 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260818-login-portal-24"></script>
+  <script src="app.js?v=20260818-sync2va-aurora-27"></script>
 </body>
 </html>

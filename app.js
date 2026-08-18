@@ -7810,6 +7810,9 @@ async function signOutForInactiveAccess() {
   if (supabaseClient) await supabaseClient.auth.signOut();
   document.body.classList.remove('employee-mode', 'admin-mode');
   $('#loginShell').hidden = false;
+  $('#loginShell').classList.remove('is-unlocked');
+  $('#loginForm')?.classList.remove('is-authenticating', 'is-denied');
+  if ($('#loginStatusLabel')) $('#loginStatusLabel').textContent = 'READY FOR IDENTITY VERIFICATION';
   setLoginMessage(message);
   render();
   showPage();
@@ -8419,10 +8422,13 @@ $('#coachingUpload').onchange = async event => {
 $('#loginForm').onsubmit = async event => {
   event.preventDefault();
   const loginForm = event.currentTarget;
+  const loginStatusLabel = $('#loginStatusLabel');
   const email = $('#loginEmail').value.trim().toLowerCase();
   const password = $('#loginPassword').value;
   const submitButton = event.submitter || $('#loginForm button[type="submit"]');
   loginForm.classList.add('is-authenticating');
+  loginForm.classList.remove('is-denied');
+  if (loginStatusLabel) loginStatusLabel.textContent = 'SCANNING IDENTITY MATRIX...';
   if (submitButton) submitButton.disabled = true;
   setLoginMessage('Signing in… please wait.', false);
   try {
@@ -8460,6 +8466,11 @@ $('#loginForm').onsubmit = async event => {
     setLoginMessage(error.message || 'Sign in failed. Please try again.');
   } finally {
     loginForm.classList.remove('is-authenticating');
+    if (!$('#loginShell').hidden) {
+      loginForm.classList.add('is-denied');
+      if (loginStatusLabel) loginStatusLabel.textContent = 'ACCESS NOT VERIFIED — RETRY';
+      window.setTimeout(() => loginForm.classList.remove('is-denied'), 900);
+    }
     if (submitButton) submitButton.disabled = false;
   }
 };
@@ -8468,10 +8479,34 @@ const loginShell = $('#loginShell');
 if (loginShell) {
   loginShell.addEventListener('pointermove', event => {
     const bounds = loginShell.getBoundingClientRect();
-    loginShell.style.setProperty('--login-pointer-x', `${event.clientX - bounds.left}px`);
-    loginShell.style.setProperty('--login-pointer-y', `${event.clientY - bounds.top}px`);
+    const x = event.clientX - bounds.left;
+    const y = event.clientY - bounds.top;
+    const rotateY = ((x / bounds.width) - .5) * 10;
+    const rotateX = (.5 - (y / bounds.height)) * 8;
+    loginShell.style.setProperty('--login-pointer-x', `${x}px`);
+    loginShell.style.setProperty('--login-pointer-y', `${y}px`);
+    loginShell.style.setProperty('--matrix-rotate-x', `${rotateX.toFixed(2)}deg`);
+    loginShell.style.setProperty('--matrix-rotate-y', `${rotateY.toFixed(2)}deg`);
   }, { passive: true });
+  loginShell.addEventListener('pointerleave', () => {
+    loginShell.style.setProperty('--matrix-rotate-x', '0deg');
+    loginShell.style.setProperty('--matrix-rotate-y', '0deg');
+  });
 }
+
+const matrixEntryDot = $('#matrixEntryDot');
+if (matrixEntryDot) {
+  matrixEntryDot.addEventListener('click', () => {
+    loginShell.classList.add('is-unlocked');
+    window.setTimeout(() => $('#loginEmail')?.focus(), 850);
+  });
+}
+
+$('#loginClear')?.addEventListener('click', () => {
+  clearLoginMessage();
+  $('#loginForm').classList.remove('is-authenticating', 'is-denied');
+  if ($('#loginStatusLabel')) $('#loginStatusLabel').textContent = 'READY FOR IDENTITY VERIFICATION';
+});
 
 $('#profileButton').onclick = async () => {
   if (usesSupabase()) {
@@ -8485,6 +8520,9 @@ $('#profileButton').onclick = async () => {
   supabaseSession = null;
   $('#loginPassword').value = '';
   $('#loginShell').hidden = false;
+  $('#loginShell').classList.remove('is-unlocked');
+  $('#loginForm')?.classList.remove('is-authenticating', 'is-denied');
+  if ($('#loginStatusLabel')) $('#loginStatusLabel').textContent = 'READY FOR IDENTITY VERIFICATION';
   $('#loginEmail').focus();
 };
 
