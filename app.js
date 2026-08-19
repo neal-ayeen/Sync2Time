@@ -3151,6 +3151,78 @@ function rejectedAiAlertHours(person, start, end) {
   }).reduce((sum, alert) => sum + Number(alert.excess_hours || 0), 0);
 }
 
+function alertTimestamp(alert) {
+  const value = new Date(alert?.updated_at || alert?.created_at || 0).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
+function latestOvertimeAlertForDate(person, dateKey) {
+  const employeeId = payrollEntryEmployeeId(person);
+  return overtimeAlerts
+    .filter(alert => alert.employee_id === employeeId &&
+      alert.alert_date === dateKey &&
+      alertBelongsToPersonRole(alert, person))
+    .sort((left, right) => alertTimestamp(right) - alertTimestamp(left))[0] || null;
+}
+
+/*
+ * Every overtime alert stores the employee's cumulative excess for its day.
+ * Adding every alert therefore counts the same minutes repeatedly whenever an
+ * employee has more than one time entry. Payroll instead recalculates each
+ * day's excess from the current time entries and uses only the latest decision
+ * for that day. This also makes edits/deletions immediately flow into payroll.
+ */
+function coachOvertimeBreakdown(person, entries, start, end) {
+  const employeeId = payrollEntryEmployeeId(person);
+  const rule = roleHourRuleFor(person.role);
+  // Coaches have one official payroll allowance: 3 hours per working day.
+  // Do not let an older role-rule row silently change payroll calculations.
+  const dailyLimit = 3;
+  const allowedDays = Array.isArray(rule?.allowed_days)
+    ? new Set(rule.allowed_days.map(day => nameKey(day)))
+    : null;
+  const dailyHours = new Map();
+
+  entries.forEach(entry => {
+    if (!entry.clock_in) return;
+    const dateKey = businessDateKey(entry.clock_in);
+    const entryDate = businessDateFromKey(dateKey);
+    if (entryDate < start || entryDate > end) return;
+    const hours = secondsBetween(entry.clock_in, entry.clock_out || Date.now()) / 3600;
+    dailyHours.set(dateKey, (dailyHours.get(dateKey) || 0) + hours);
+  });
+
+  const approvedRequestsByDate = new Map();
+  overtimeRequests.forEach(request => {
+    if (request.employeeId !== employeeId || request.status !== 'approved' || !request.date) return;
+    const requestDate = businessDateFromKey(request.date);
+    if (requestDate < start || requestDate > end || isSecondaryPayrollAssignment(person)) return;
+    approvedRequestsByDate.set(request.date, (approvedRequestsByDate.get(request.date) || 0) + Number(request.hours || 0));
+  });
+
+  const totals = { approved: 0, pending: 0, rejected: 0, excess: 0 };
+  dailyHours.forEach((hours, dateKey) => {
+    const date = businessDateFromKey(dateKey);
+    const dayName = nameKey(date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }));
+    const allowed = allowedDays?.size && !allowedDays.has(dayName) ? 0 : dailyLimit;
+    const excess = Math.max(0, hours - allowed);
+    if (excess <= 0.004) return;
+
+    totals.excess += excess;
+    const approvedByRequest = Math.min(excess, Math.max(0, approvedRequestsByDate.get(dateKey) || 0));
+    totals.approved += approvedByRequest;
+    const undecided = Math.max(0, excess - approvedByRequest);
+    if (undecided <= 0.004) return;
+
+    const alert = latestOvertimeAlertForDate(person, dateKey);
+    if (alert?.status === 'approved' && alert?.admin_decision === 'approve_ot') totals.approved += undecided;
+    else if (alert?.status === 'rejected' || alert?.admin_decision === 'reject_excess') totals.rejected += undecided;
+    else totals.pending += undecided;
+  });
+
+  return totals;
+}
+
 async function requestAiOvertimeReview(timeEntryId) {
   if (!usesSupabase() || !timeEntryId) return null;
   try {
@@ -4615,10 +4687,13 @@ function buildPayrollRows(role = selectedPayrollRole, rangeOverride = null) {
       const date = businessDateFromKey(request.date);
       return request.employeeId === employeeId && request.status === 'approved' && date >= start && date <= end && !isSecondaryPayrollAssignment(person);
     }).reduce((sum, request) => sum + Number(request.hours || 0), 0);
-    const aiApprovedOtHours = approvedAiAlertOtHours(person, start, end);
-    const otHours = requestedOtHours + aiApprovedOtHours;
-    const pendingOtHours = pendingAiAlertHours(person, start, end);
-    const rejectedOtHours = rejectedAiAlertHours(person, start, end);
+    const coachOt = role === 'coaches'
+      ? coachOvertimeBreakdown(person, entries, start, end)
+      : { approved: 0, pending: 0, rejected: 0, excess: 0 };
+    const aiApprovedOtHours = Math.max(0, coachOt.approved - requestedOtHours);
+    const otHours = role === 'coaches' ? coachOt.approved : requestedOtHours;
+    const pendingOtHours = role === 'coaches' ? coachOt.pending : 0;
+    const rejectedOtHours = role === 'coaches' ? coachOt.rejected : 0;
     const excludedAiHours = pendingOtHours + rejectedOtHours;
     const payrollBaseHours = Math.max(0, actualHours - excludedAiHours);
     const expectedHours = scheduledHoursInRange(person, start, end);
@@ -4664,7 +4739,7 @@ function buildPayrollRows(role = selectedPayrollRole, rangeOverride = null) {
       grossPhp = adminAttendancePay + otPay;
     } else if (role === 'smm') {
       grossPhp = values.grossPayOverride === null ? cutoffPay : Number(values.grossPayOverride);
-    } else if (role === 'other') {
+    } else if (role === 'webinar' || role === 'other') {
       grossPhp = monthlyPhp ? cutoffPay : payableHours * hourlyUsd * fx;
     }
     const calculatedHolidayPayPhp = calculatedHolidayPay(person, role, entries, start, end, fx, hourlyUsd, monthlyPhp, adminDailyRate);
